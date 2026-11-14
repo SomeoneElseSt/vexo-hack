@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS sealed_record (
   PRIMARY KEY (kind, id)
 );
 """
-KINDS = ("Observation", "Encounter", "Communication", "MedicationRequest")
+KINDS = ("Observation", "Encounter", "Communication", "MedicationRequest",
+         "MedicationAdministration")
 
 
 SECRET = None  # the device secret, loaded at startup on this machine
@@ -296,7 +297,8 @@ class Handler(BaseHTTPRequestHandler):
                             {"resource": pair["provenance"]}]
             for kind, resource_type in (("Encounter", "Encounter"),
                                         ("Communication", "Communication"),
-                                        ("MedicationRequest", "MedicationRequest")):
+                                        ("MedicationRequest", "MedicationRequest"),
+                                        ("MedicationAdministration", "MedicationAdministration")):
                 for rec in rows(kind):
                     res = {"resourceType": resource_type, "id": rec.get("id"),
                            "meta": {"profile": ["http://hl7.org/fhir/StructureDefinition/"
@@ -306,7 +308,8 @@ class Handler(BaseHTTPRequestHandler):
                                 "from", "to", "sender", "body", "priority", "action",
                                 "name", "dose", "times", "prescribed_by", "visit_id",
                                 "start", "end", "confirmed_at", "confirmed_by",
-                                "medication_ids", "related_event_ids"):
+                                "medication_ids", "related_event_ids", "medication_id",
+                                "medication_name", "dose_taken", "taken_at", "method"):
                         if key in rec:
                             res[key if key != "ts" else "effectiveDateTime"] = rec[key]
                     entries.append({"resource": res})

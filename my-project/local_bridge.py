@@ -90,8 +90,8 @@ class KeyHandler(BaseHTTPRequestHandler):
 
 # ---------- band pipeline ----------
 
-NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
-             "nine", "ten", "out of"]
+NUM_WORDS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+             "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 
 EXTRACTION_PROMPT = """You extract a symptom event from a patient's spoken note.
 Return ONLY JSON with these keys:
@@ -130,7 +130,7 @@ def _ask(endpoint: str, model: str, quote: str) -> dict:
     fields = {k: parsed.get(k) for k in ("body_location", "quality", "severity", "activity")}
     # severity is only kept when the patient actually said a number
     if fields["severity"] is not None and not any(
-            w in quote.lower() for w in NUM_WORDS) and not any(c.isdigit() for c in quote):
+            w in quote.lower().split() for w in NUM_WORDS) and not any(c.isdigit() for c in quote):
         fields["severity"] = None
     return fields
 
@@ -150,18 +150,73 @@ def extract(quote: str) -> tuple[dict, str | None]:
     return {}, None
 
 
-def push_sealed(event: dict) -> None:
+MED_WORDS = ("medicine", "medication", "med", "pill", "tablet", "dose")
+ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+            "1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "5th": 5}
+
+
+def push_sealed(event: dict, kind: str = "Observation") -> None:
     """Seal with this device's key and hand the VM an opaque blob."""
     sealed = dc.seal(SECRET, json.dumps(event).encode())
     body = json.dumps({"event": {"id": event["id"], "device": dc.device_id(SECRET)},
                        "sealed": sealed}).encode()
-    url = f"{OPTIONS.records}/Observation"
+    url = f"{OPTIONS.records}/{kind}"
     try:
         r = requests.post(url, data=body, timeout=20, headers={
             "Content-Type": "application/json", "X-Device-Auth": dc.auth_token(SECRET)})
-        print(f"pushed {event['id']} -> {r.status_code}", flush=True)
+        print(f"pushed {kind} {event['id']} -> {r.status_code}", flush=True)
     except Exception as exc:
         print(f"push failed: {type(exc).__name__}: {exc}", flush=True)
+
+
+def fetch_medicines() -> list[dict]:
+    """The medicine list, so 'medicine 2 taken' can be matched by index."""
+    url = f"{OPTIONS.records}/MedicationRequest"
+    try:
+        r = requests.get(url, timeout=20, headers={"X-Device-Auth": dc.auth_token(SECRET)})
+        r.raise_for_status()
+        return [m for m in r.json() if isinstance(m, dict) and m.get("id")]
+    except Exception as exc:
+        print(f"could not fetch medicines: {type(exc).__name__}: {exc}", flush=True)
+        return []
+
+
+def parse_taken(quote: str) -> int | None:
+    """'medicine 2 taken' -> 2 (1-based). None if the note is not a dose report."""
+    low = quote.lower()
+    if not any(w in low for w in MED_WORDS):
+        return None
+    if not any(w in low for w in ("took", "taken", "take", "did")):
+        return None
+    for word, n in {**NUM_WORDS, **ORDINALS}.items():
+        if word in low.split():
+            return n
+    for token in low.replace(",", " ").split():
+        if token.isdigit():
+            return int(token)
+    return 1   # no number given: assume the single/first medicine
+
+
+def log_taken(quote: str) -> bool:
+    """If the patient said they took a medicine, write a sealed administration."""
+    index = parse_taken(quote)
+    if index is None:
+        return False
+    medicines = fetch_medicines()
+    chosen = medicines[index - 1] if 0 < index <= len(medicines) else None
+    taken = {
+        "schema_version": "0.1",
+        "id": f"adm-{int(time.time() * 1000)}",
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "taken_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "medication_id": chosen.get("id") if chosen else None,
+        "medication_name": chosen.get("name") if chosen else f"medicine {index}",
+        "dose_taken": chosen.get("dose") if chosen else None,
+        "method": "voice",
+        "verbatim_quote": quote,
+    }
+    push_sealed(taken, "MedicationAdministration")
+    return True
 
 
 async def band_loop() -> None:
@@ -194,6 +249,9 @@ async def band_loop() -> None:
             chunks = 0
             quote = await asyncio.to_thread(transcribe, pcm)
             if not quote:
+                continue
+            if await asyncio.to_thread(log_taken, quote):
+                print(f"dose logged from voice: {quote!r}", flush=True)
                 continue
             fields, used_model = await asyncio.to_thread(extract, quote)
             event = {
