@@ -219,53 +219,187 @@ def log_taken(quote: str) -> bool:
     return True
 
 
+SPEECH_RMS_FLOOR = 120    # never treat near-silence as speech
+SPEECH_FACTOR = 2.5       # speech is this much louder than the room
+SILENCE_MS = 1200         # an utterance ends after this much quiet
+MIN_SPEECH_MS = 700       # ignore blips shorter than this
+MAX_UTTERANCE_MS = 20000   # hard ceiling so a noisy room cannot grow forever
+MIN_WORDS = 3             # a 1-2 word fragment is not a report
+CHUNK_MS = 20             # the band sends 20 ms Opus packets
+SAMPLES_PER_CHUNK = 320   # 20 ms at 16 kHz mono
+
+DECISION_MODEL = "gemma3:4b"        # the small local gate
+DECISION_URL = "http://localhost:11434/v1"
+DECISION_PROMPT = """You decide whether a patient's spoken sentence contains a
+health report worth logging in their medical record.
+Return ONLY JSON: {"log": true|false, "kind": "symptom"|"dose"|"other", "reason": "short"}
+Rules:
+- log true only for a symptom the patient feels, or a medicine they took.
+- Small talk, thanks, counting, background chatter: log false.
+- Never diagnose, never add details that were not said.
+"""
+
+LED_PROCESSING = "#ff0000"
+LED_SAVED = "#00ff00"
+LED_UNCLEAR = "#ffaa00"
+LED_HOLD_SECONDS = 1.5
+
+
+async def set_led(band, colour: str) -> None:
+    """Light the band. The mic indicator outranks us while audio is streaming."""
+    try:
+        await band.set_led(colour)
+    except Exception as exc:
+        print(f"led {colour} skipped: {type(exc).__name__}: {exc}", flush=True)
+
+
+def rms(pcm: bytes) -> int:
+    if len(pcm) < 2:
+        return 0
+    samples = np.frombuffer(pcm[:len(pcm) // 2 * 2], dtype=np.int16).astype(np.int32)
+    return int(np.sqrt(np.mean(samples ** 2))) if len(samples) else 0
+
+
+GATE_RETRIES = 3
+
+
+def _keyword_verdict(quote: str) -> dict:
+    dose = parse_taken(quote) is not None
+    words = ("pain", "pressure", "dizzy", "sharp", "ache", "nausea", "tired", "chest",
+             "head", "stomach", "burning", "tight", "cramp")
+    log = dose or any(w in quote.lower() for w in words)
+    return {"log": log, "kind": "dose" if dose else ("symptom" if log else "other"),
+            "reason": "keyword fallback"}
+
+
+def decide(quote: str) -> dict:
+    """The small local gate: should this sentence become a record?
+
+    Bad JSON is retried (models slip on formatting); if every try fails the
+    keyword gate decides, so a real report is never lost.
+    """
+    if len(quote.split()) < MIN_WORDS:
+        return {"log": False, "kind": "other", "reason": "too short"}
+    payload = {
+        "model": DECISION_MODEL,
+        "messages": [{"role": "system", "content": DECISION_PROMPT},
+                     {"role": "user", "content": quote}],
+        "format": "json", "temperature": 0, "stream": False,
+    }
+    for attempt in range(1, GATE_RETRIES + 1):
+        try:
+            r = requests.post(f"{DECISION_URL}/chat/completions", json=payload, timeout=60)
+            r.raise_for_status()
+            content = r.json()["choices"][0]["message"]["content"].strip()
+            if content.startswith("```"):
+                content = content.strip("`")
+                content = content[content.find("{"):content.rfind("}") + 1]
+            answer = json.loads(content)
+            if "log" not in answer:
+                raise ValueError("no 'log' field")
+            return {"log": bool(answer.get("log")), "kind": answer.get("kind") or "other",
+                    "reason": answer.get("reason") or ""}
+        except (json.JSONDecodeError, ValueError, requests.RequestException, KeyError) as exc:
+            print(f"gate attempt {attempt}/{GATE_RETRIES} failed: "
+                  f"{type(exc).__name__}: {exc}", flush=True)
+    return _keyword_verdict(quote)
+
+
 async def band_loop() -> None:
     from vexo_open import Band as AsyncBand
     from vexo_open.audio import PcmDecoder
 
     decoder = PcmDecoder()
-    buffer = bytearray()
-    chunks = 0
     band = await AsyncBand.connect(29, transport=OPTIONS.transport)
 
+    speech = bytearray()      # the utterance being built
+    pre_roll = bytearray()     # a little audio before speech starts
+    quiet_chunks = 0
+    speech_chunks = 0
+
+    floor = 200.0      # running noise estimate, adapts to the room
+
     def on_audio(packet) -> None:
-        nonlocal chunks
+        nonlocal quiet_chunks, speech_chunks, floor
         pcm = decoder.feed(packet)
-        if pcm:
-            buffer.extend(pcm)
-            chunks += 1
+        if not pcm:
+            return
+        level = rms(pcm)
+        # whisper of the room: drift slowly up on quiet, down on loud
+        floor = floor * 0.995 + min(level, floor * 1.5) * 0.005
+        threshold = max(SPEECH_RMS_FLOOR, floor * SPEECH_FACTOR)
+        loud = level >= threshold
+        if loud:
+            speech.extend(pre_roll)
+            pre_roll.clear()
+            speech.extend(pcm)
+            quiet_chunks = 0
+            speech_chunks += 1
+            return
+        if speech_chunks:
+            speech.extend(pcm)
+            quiet_chunks += 1
+            return
+        pre_roll.extend(pcm)
+        if len(pre_roll) > SAMPLES_PER_CHUNK * 2 * 25:
+            del pre_roll[:len(pre_roll) - SAMPLES_PER_CHUNK * 2 * 25]
 
     band.on("audio", on_audio)
-    band.on("tap", lambda e: print("tap marked a symptom now", flush=True))
-    await band.configure(audio=True, events=True)
-    print(f"band {band.name} over {OPTIONS.transport}: mic on, listening", flush=True)
+
+    async def process(utterance: bytes) -> None:
+        quote = await asyncio.to_thread(transcribe, utterance)
+        if not quote:
+            return
+        verdict = await asyncio.to_thread(decide, quote)
+        print(f"heard {quote!r} -> log={verdict['log']} kind={verdict['kind']} "
+              f"({verdict['reason']})", flush=True)
+        if not verdict["log"]:
+            return
+        if verdict["kind"] == "dose" or parse_taken(quote) is not None:
+            await asyncio.to_thread(log_taken, quote)
+            return
+        fields, used_model = await asyncio.to_thread(extract, quote)
+        event = {
+            "schema_version": "0.1",
+            "id": f"evt-{int(time.time() * 1000)}",
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "source": "band",
+            "audio_seconds": round(len(utterance) / 2 / 16000, 2),
+            "verbatim_quote": quote,
+            "transcript_model": "faster-whisper-small",
+            "extract_model": used_model if fields else None,
+            **fields,
+        }
+        await asyncio.to_thread(push_sealed, event)
+
+    await band.configure(audio=True)
+    print(f"band {band.name} over {OPTIONS.transport}: listening — just talk", flush=True)
     try:
         while True:
-            await asyncio.sleep(0.5)
-            if chunks < 40:  # 40 * 20 ms = 0.8 s per utterance
+            await asyncio.sleep(0.2)
+            ms = quiet_chunks * CHUNK_MS
+            spoken = speech_chunks * CHUNK_MS
+            too_long = spoken >= MAX_UTTERANCE_MS
+            if not speech_chunks or not (ms >= SILENCE_MS or too_long):
                 continue
-            pcm = bytes(buffer)
-            buffer.clear()
-            chunks = 0
-            quote = await asyncio.to_thread(transcribe, pcm)
-            if not quote:
+            utterance = bytes(speech)
+            speech.clear()
+            speech_chunks = 0
+            quiet_chunks = 0
+            if len(utterance) < MIN_SPEECH_MS * 32:
                 continue
-            if await asyncio.to_thread(log_taken, quote):
-                print(f"dose logged from voice: {quote!r}", flush=True)
-                continue
-            fields, used_model = await asyncio.to_thread(extract, quote)
-            event = {
-                "schema_version": "0.1",
-                "id": f"evt-{int(time.time() * 1000)}",
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                "source": "band",
-                "audio_seconds": round(len(pcm) / 2 / 16000, 2),
-                "verbatim_quote": quote,
-                "transcript_model": "faster-whisper-small",
-                "extract_model": used_model if fields else None,
-                **fields,
-            }
-            await asyncio.to_thread(push_sealed, event)
+            # the mic owns the light, so stop it briefly to show red / green
+            await band.configure(audio=False)
+            await set_led(band, LED_PROCESSING)
+            try:
+                await process(utterance)
+                await set_led(band, LED_SAVED)
+            except Exception as exc:
+                print(f"process failed: {type(exc).__name__}: {exc}", flush=True)
+                await set_led(band, LED_UNCLEAR)
+            await asyncio.sleep(LED_HOLD_SECONDS)
+            pre_roll.clear()
+            await band.configure(audio=True)
     finally:
         await band.configure(audio=False)
         await band.disconnect()
