@@ -867,36 +867,9 @@ function dEmpty(title, body) { const d = el('div', 'dempty'); d.append(icon('doc
 
 function renderDash(sorted) {
   const h = new Date().getHours();
-  $('dash-greet').textContent = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
   $('dash-line').hidden = true;
   $('dash-banner').hidden = true;
   const lv = pastVisits()[0];
-
-  // Upcoming Visits: an appointment table, the way an EHR lists them
-  const hv = $('dc-upcoming');
-  hv.replaceChildren(dcardHead('Upcoming Visits', 'All Visits', '#visits'));
-  const ups = upcoming();
-  if (ups.length) {
-    const tbl = el('table', 'appt-table');
-    const thead = el('thead'); const hr = el('tr');
-    ['Date', 'Time', 'Visit Type', 'Provider', 'Department', ''].forEach((t) => hr.append(el('th', null, t)));
-    thead.append(hr); tbl.append(thead);
-    const tb = el('tbody');
-    ups.slice(0, 4).forEach((u, i) => {
-      const tr = el('tr', i === 0 ? 'next' : '');
-      const href = u.scheduled ? '#visits' : '#visit/' + encodeURIComponent(u.v.id);
-      tr.append(el('td', 'c-date', `${weekday(u.p)} ${MON[u.p.mo - 1]} ${u.p.d}, ${u.p.y}`),
-        el('td', 'c-time', u.p.h !== null ? clock(u.p) : 'To be scheduled'),
-        el('td', null, u.scheduled ? u.title : 'Follow-up Visit'),
-        el('td', null, u.v.clinician || '—'),
-        el('td', 'c-dept', u.v.specialty || '—'));
-      const td = el('td', 'c-act'); const a = el('a', null, 'Details'); a.href = href; td.append(a); tr.append(td);
-      tr.addEventListener('click', (ev) => { if (ev.target.tagName !== 'A') location.hash = href; });
-      tb.append(tr);
-    });
-    tbl.append(tb);
-    hv.append(tbl);
-  } else hv.append(dEmpty('No upcoming visits', 'Follow-up visits your clinician schedules appear here.'));
 
   // To Do: one line each, with what to act on shown as chips
   const todo = $('dc-todo');
@@ -961,24 +934,6 @@ function renderDash(sorted) {
     md.append(g);
   } else md.append(dEmpty('No medications on file', 'Prescriptions from your visits appear here.'));
 
-  // Past Visits: the last one, shown as facts, not paragraphs
-  const vc = $('dc-visit');
-  vc.replaceChildren(dcardHead('Past Visits', 'All Visits', '#visits'));
-  if (lv) {
-    const p = parseTs(lv.ts);
-    const top = el('a', 'dvisit'); top.href = '#visit/' + encodeURIComponent(lv.id);
-    top.append(dateTile(p));
-    const m = el('div', 'row-main');
-    m.append(el('span', 'dvisit-title', lv.clinician || 'Visit'), el('span', 'row-sub', lv.specialty || ''), el('span', 'row-meta', lv.reason || ''));
-    top.append(m);
-    vc.append(top);
-    const facts = el('div', 'vfacts');
-    const fact = (ic, n, label) => { const f = el('span', 'vfact'); f.append(icon(ic), el('b', null, n), el('span', null, label)); facts.append(f); };
-    fact('todo', `${(lv.instructions || []).filter(present).length}`, 'Instructions');
-    fact('med', `${state.meds.filter((x) => x.visit_id === lv.id || (lv.medication_ids || []).includes(x.id)).length}`, 'Medications');
-    fact('visit', present(lv.follow_up) ? `${MON[parseTs(lv.follow_up).mo - 1]} ${parseTs(lv.follow_up).d}` : '—', 'Follow-up');
-    vc.append(facts, dcardFoot('After Visit Summary', '#visit/' + encodeURIComponent(lv.id)));
-  } else vc.append(dEmpty('No visits yet', 'After a visit, its summary appears here.'));
 }
 
 // bar chart: highest severity each day for 14 days (empty bar = nothing rated)

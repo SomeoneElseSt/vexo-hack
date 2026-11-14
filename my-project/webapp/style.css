@@ -762,3 +762,60 @@ body.desktop .grab { display: none; }
 .appt-table .c-act { text-align: right; }
 .appt-table .c-act a { color: var(--tint); font-weight: 600; }
 .appt-table tbody tr:last-child td { border-bottom: 0; }
+
+/* ===================== clinical look (desktop + phone) =====================
+   One accent (teal) for actions and links, neutral grays for everything else,
+   red only to flag high severity (7-10), like an abnormal lab flag. */
+:root { --flag: #b42318; }
+
+/* layout: chart + to do, then symptoms + medications */
+#dc-symptoms { grid-column: span 2; order: 10; }
+#dc-meds { grid-column: auto; order: 11; }
+#dc-meds .dlist { display: flex; flex-direction: column; gap: 0; }
+#dc-meds .drow { flex-direction: column; align-items: stretch; padding: 12px 2px; border: 0; border-radius: 0; background: none; }
+#dc-meds .drow + .drow { border-top: 1px solid var(--sep); border-radius: 0; }
+#dc-meds .mtile.to-review { background: none !important; border-color: transparent !important; }
+
+/* neutral icon squares everywhere */
+.drow-ico, .drow-ico.rose, .drow-ico.amber, .loc-ico, .med-ico, .glance-ico, .tile-ico, .row-ico { background: #f1f4f6 !important; color: #5b6b75 !important; }
+
+/* severity: gray ring, dark number; red only when high */
+.ring .arc, .ring.low .arc, .ring.mid .arc { stroke: #6b7c86; }
+.ring b, .ring.low b, .ring.mid b { color: var(--ink); }
+.ring.high .arc { stroke: var(--flag); }
+.ring.high b { color: var(--flag); }
+.sev.low, .sev.mid { color: var(--ink); }
+.sev.high { color: var(--flag); }
+
+/* chart: one color, red bars only for high days */
+.chart-svg .bar.low, .chart-svg .bar.mid { fill: #6f8b96; }
+.chart-svg .bar.high { fill: var(--flag); }
+.chart-svg .bar.none { fill: #d5dce1; }
+.legend { display: none; }
+
+/* chips and tags: gray, with the state shown by an icon */
+.tchip, .tchip.warn { background: #f1f4f6; color: var(--ink-2); }
+.dchip.taken { background: #f1f4f6; border-color: #f1f4f6; color: var(--ink); }
+.dchip.missed { background: #fff; border-color: #d6dde2; color: var(--ink-2); border-style: dashed; }
+.med-ok { background: none; color: var(--ink-2); }
+.week i.on { background: #6f8b96; }
+.med.to-review { background: none; }
+.mtile .tchip.warn { color: var(--ink); }
+
+/* right rail: plain list rows instead of colored cards */
+.ev, .ev.symptom, .ev.visit, .ev.followup, .ev.dose { background: none; border-radius: 0; margin: 0; padding: 10px 2px; border-bottom: 1px solid var(--sep); }
+.ev .ev-top, .ev.symptom .ev-top, .ev.visit .ev-top, .ev.followup .ev-top, .ev.dose .ev-top { color: var(--ink); font-weight: 600; }
+.ev .ev-top svg { color: #6b7c86; }
+.ev:hover { transform: none; background: #f7f9fa; }
+.dot.symptom, .dot.visit, .dot.followup, .dot.dose { background: #8a9aa3; opacity: 1; }
+.cal-day.sel { background: #e8eef1; color: var(--ink); }
+.avatar-ini { background: #e8eef1; color: var(--ink); }
+
+/* sidebar: quieter */
+.side { background: #12343b; box-shadow: none; }
+.side-badge, .tab-badge { background: #5b6b75; }
+
+/* phone home: drop the tinted tiles and gradient */
+.home-hero { background: linear-gradient(180deg, #10636e 0%, #10636e 60%, var(--bg) 100%); }
+.home-hero::after { display: none; }
+.tile-ico { background: none !important; color: var(--tint) !important; }
