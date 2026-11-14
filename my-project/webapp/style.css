@@ -819,3 +819,29 @@ body.desktop .grab { display: none; }
 .home-hero { background: linear-gradient(180deg, #10636e 0%, #10636e 60%, var(--bg) 100%); }
 .home-hero::after { display: none; }
 .tile-ico { background: none !important; color: var(--tint) !important; }
+
+/* ===================== minimal Home ===================== */
+/* chart only; no number tiles */
+#dc-trend .dstats { display: none; }
+#dc-trend .chart-svg .axis { fill: #a9b4bb; }
+/* one line per item */
+.dash-grid .todo-row .tchips,
+#dc-symptoms .row-sub, #dc-symptoms .src,
+#dc-meds .row-sub, #dc-meds .week, #dc-meds .med-ok, #dc-meds .tchip { display: none; }
+#dc-meds .drow { flex-direction: row; align-items: center; padding: 10px 2px; }
+#dc-meds .mtile-top { flex: 1; min-width: 0; }
+#dc-meds .chips-dose { flex: none; }
+#dc-meds .drow-ico { display: none; }
+#dc-symptoms .srow { padding: 8px 4px; }
+#dc-symptoms .loc-ico { width: 30px; height: 30px; }
+.dash-grid .drow-ico { width: 30px; height: 30px; }
+.dcard { padding: 18px 20px; }
+.dcard-head { margin-bottom: 6px; }
+.dcard-head h2 { font-size: 16px; }
+.dash-hello h1 { font-size: 26px; }
+/* rail: calendar + that day's items as single lines; no care team */
+.rail .ev-sub, .rail #care-team, .rail .cal-sel { display: none; }
+.rail .ev { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 2px; }
+.rail .ev-top { font-weight: 500; font-size: 14px; }
+.rail .ev-time { font-weight: 500; color: var(--ink-2); font-size: 13px; white-space: nowrap; }
+.rail #cal-day { margin-top: 14px; border-top: 1px solid var(--sep); }

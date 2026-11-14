@@ -884,18 +884,18 @@ function renderDash(sorted) {
     a.append(i, m, icon('chev', 'chev'));
     list.append(a);
   };
-  if (review.length) todoRow('med', `Review ${review.length} medication${review.length > 1 ? 's' : ''}`, review.map((m) => m.name), '#medications');
-  if (lv && dayDiff(parseTs(lv.ts) || { y: 1970, mo: 1, d: 1 }) <= 7) todoRow('doc', 'After Visit Summary', [lv.clinician || 'Visit', dayName(parseTs(lv.ts))], '#visit/' + encodeURIComponent(lv.id));
+  if (review.length) todoRow('med', review.length === 1 ? `Review ${review[0].name}` : `Review ${review.length} medications`, [], '#medications');
+  if (lv && dayDiff(parseTs(lv.ts) || { y: 1970, mo: 1, d: 1 }) <= 7) todoRow('doc', 'Read After Visit Summary', [], '#visit/' + encodeURIComponent(lv.id));
   const missed = state.meds.filter((m) => m.confirmed_at && doseStatus(m).some((x) => x.state === 'missed'));
-  if (missed.length) todoRow('clock', 'Doses not marked today', missed.map((m) => m.name), '#medications');
+  if (missed.length) todoRow('clock', missed.length === 1 ? `Mark ${missed[0].name} dose` : `Mark ${missed.length} doses`, [], '#medications');
   if (list.childElementCount) todo.append(list); else todo.append(dEmpty('All done', 'Nothing to do right now.'));
 
   // Recent Symptoms
   const sy = $('dc-symptoms');
-  sy.replaceChildren(dcardHead('Recent Symptoms', `View all ${state.events.length}`, '#symptoms'));
+  sy.replaceChildren(dcardHead('Recent Symptoms', 'View all', '#symptoms'));
   if (sorted.length) {
     const g = el('div', 'dlist');
-    sorted.slice(0, 6).forEach((e) => g.append(symptomRow(e, false)));
+    sorted.slice(0, 5).forEach((e) => g.append(symptomRow(e, false)));
     sy.append(g);
   } else sy.append(dEmpty('No symptoms logged', 'Tap the band and describe what you feel.'));
 
@@ -1040,13 +1040,13 @@ function renderRail() {
     if (it.kind === 'symptom') {
       a.href = '#symptoms';
       top.append(el('span', null, symptomTitle(it.e)));
-      a.append(top, el('span', 'ev-time', [clock(p), sevText(it.e.severity) ? `Severity ${sevText(it.e.severity)}` : null].filter(Boolean).join(' · ')));
+      a.append(top, el('span', 'ev-time', clock(p)));
       if (present(it.e.activity)) a.append(el('span', 'ev-sub', cap(it.e.activity)));
       a.addEventListener('click', (ev) => { ev.preventDefault(); symptomSheet(it.e); });
     } else if (it.kind === 'dose') {
       a.href = '#medications';
       top.append(el('span', null, cap(it.d.medication_name) || 'Medication'));
-      a.append(top, el('span', 'ev-time', `Taken ${clock(p)}`), el('span', 'ev-sub', it.d.method === 'voice' ? 'Said on band' : 'Logged in app'));
+      a.append(top, el('span', 'ev-time', clock(p)));
     } else {
       a.href = '#visit/' + encodeURIComponent(it.v.id);
       top.append(el('span', null, it.kind === 'followup' ? 'Follow-up Visit' : (it.v.specialty || 'Office Visit')));
