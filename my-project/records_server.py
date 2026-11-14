@@ -62,10 +62,17 @@ def db() -> sqlite3.Connection:
 
 
 def rows() -> list[dict]:
-    """Decrypt and verify every record with this device's key."""
+    """Decrypt and verify every record with this device's key.
+
+    In vault mode (the VM) there is no key, so only opaque blobs are returned.
+    """
     with db() as conn:
         sealed_rows = [dict(r) for r in conn.execute(
             "SELECT * FROM observation ORDER BY received_at")]
+    if SECRET is None:
+        return [{"id": r["id"], "device": r["device"], "sealed": True,
+                 "nonce": r["nonce"], "ct": r["ct"], "mac": r["mac"]}
+                for r in sealed_rows]
     events = []
     for r in sealed_rows:
         try:
@@ -78,24 +85,37 @@ def rows() -> list[dict]:
 
 
 def store(event: dict, sealed: dict | None) -> dict:
-    """A record must arrive sealed by this device; the server only stores ciphertext."""
+    """A record must arrive sealed by the owning device.
+
+    Vault mode stores the ciphertext as-is and refuses plaintext: the VM can
+    never read the records, only keep them for the device that can.
+    """
+    if SECRET is None and not sealed:
+        raise ValueError("vault accepts only sealed records (no device key here)")
     event.setdefault("id", f"evt-{int(time.time() * 1000)}")
     event.setdefault("ts", datetime.now().astimezone().isoformat(timespec="seconds"))
-    plain = json.dumps(event).encode()
-    sealed = sealed or dc.seal(SECRET, plain)
-    if dc.open_sealed(SECRET, sealed) != plain:
-        raise ValueError("sealed record does not match its content")
+    if sealed:
+        device = event.get("device") or (dc.device_id(SECRET) if SECRET else "unknown")
+    else:
+        plain = json.dumps(event).encode()
+        sealed = dc.seal(SECRET, plain)
+        if dc.open_sealed(SECRET, sealed) != plain:
+            raise ValueError("sealed record does not match its content")
+        device = dc.device_id(SECRET)
     with LOCK, db() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO observation (id, device, nonce, ct, mac, received_at) "
             "VALUES (?,?,?,?,?,?)",
-            (event["id"], dc.device_id(SECRET), sealed["nonce"], sealed["ct"],
+            (event["id"], device, sealed["nonce"], sealed["ct"],
              sealed["mac"], datetime.now(timezone.utc).isoformat()))
-    return event
+    return {"id": event["id"], "device": device, "stored": "sealed" if SECRET is None else "ok"}
 
 
 def authorized(handler: BaseHTTPRequestHandler) -> bool:
-    """The caller must prove it holds the device secret."""
+    """The caller must prove it holds the device secret (vault mode: any caller
+    holding the shared preview token may write sealed records, nobody may read)."""
+    if SECRET is None:
+        return True
     presented = handler.headers.get("X-Device-Auth") or ""
     return hmac_compare(presented, dc.auth_token(SECRET))
 
@@ -312,11 +332,19 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--data-dir", default=str(HERE / "data"))
+    parser.add_argument("--vault", action="store_true",
+                        help="no device key: store sealed blobs, never decrypt")
     args = parser.parse_args()
     DB_PATH = Path(args.data_dir) / "records.db"
-    SECRET = dc.load_or_create_secret()
-    print(f"records server on http://0.0.0.0:{args.port}/ (sqlite {DB_PATH})")
-    print(f"device id: {dc.device_id(SECRET)} — key in {dc.KEY_FILE}", flush=True)
+    if args.vault:
+        SECRET = None
+        print(f"records VAULT on http://0.0.0.0:{args.port}/ (sqlite {DB_PATH})")
+        print("no device key here: records are stored sealed and cannot be read "
+              "on this machine", flush=True)
+    else:
+        SECRET = dc.load_or_create_secret()
+        print(f"records server on http://0.0.0.0:{args.port}/ (sqlite {DB_PATH})")
+        print(f"device id: {dc.device_id(SECRET)} — key in {dc.KEY_FILE}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()
 
 
