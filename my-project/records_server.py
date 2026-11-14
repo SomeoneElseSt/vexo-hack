@@ -44,7 +44,6 @@ CREATE TABLE IF NOT EXISTS observation (
   device TEXT NOT NULL,
   nonce TEXT NOT NULL,
   ct TEXT NOT NULL,
-  mac TEXT NOT NULL,
   received_at TEXT NOT NULL
 );
 """
@@ -71,7 +70,7 @@ def rows() -> list[dict]:
             "SELECT * FROM observation ORDER BY received_at")]
     if SECRET is None:
         return [{"id": r["id"], "device": r["device"], "sealed": True,
-                 "nonce": r["nonce"], "ct": r["ct"], "mac": r["mac"]}
+                 "nonce": r["nonce"], "ct": r["ct"]}
                 for r in sealed_rows]
     events = []
     for r in sealed_rows:
@@ -104,10 +103,10 @@ def store(event: dict, sealed: dict | None) -> dict:
         device = dc.device_id(SECRET)
     with LOCK, db() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO observation (id, device, nonce, ct, mac, received_at) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO observation (id, device, nonce, ct, received_at) "
+            "VALUES (?,?,?,?,?)",
             (event["id"], device, sealed["nonce"], sealed["ct"],
-             sealed["mac"], datetime.now(timezone.utc).isoformat()))
+             datetime.now(timezone.utc).isoformat()))
     return {"id": event["id"], "device": device, "stored": "sealed" if SECRET is None else "ok"}
 
 

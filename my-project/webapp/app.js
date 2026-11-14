@@ -14,6 +14,49 @@ const API = (() => {
 })();
 const REFRESH_MS = 5000;
 const RECENT_COUNT = 3;
+const BRIDGE = 'http://127.0.0.1:8768';   // the local bridge on this device
+
+// ---------- device unlock (WebCrypto) ----------
+// The local bridge holds the device key; it hands over an auth token and the
+// AES-GCM key, never the raw secret. Records are sealed blobs until then.
+const session = { auth: null, aesKey: null, deviceId: null };
+
+async function unlock() {
+  try {
+    const res = await fetch(BRIDGE + '/session', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const s = await res.json();
+    session.auth = s.auth;
+    session.deviceId = s.device_id;
+    session.aesKey = await crypto.subtle.importKey(
+      'raw', b64ToBytes(s.aes_key), { name: 'AES-GCM' }, false, ['decrypt']);
+    setLocked(false);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function b64ToBytes(b64) {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+async function decryptSealed(rec) {
+  if (!session.aesKey) return null;
+  try {
+    const plain = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: b64ToBytes(rec.nonce), additionalData: new TextEncoder().encode(session.deviceId) },
+      session.aesKey, b64ToBytes(rec.ct));
+    return JSON.parse(new TextDecoder().decode(plain));
+  } catch (_) {
+    return null;   // not this device's record, or tampered
+  }
+}
+
+function setLocked(locked) {
+  const banner = $('lock-banner');
+  if (banner) banner.hidden = !locked;
+}
 
 // ---------- small helpers ----------
 const $ = (id) => document.getElementById(id);
@@ -28,7 +71,9 @@ function el(tag, cls, text) {
 const present = (v) => v !== null && v !== undefined && String(v).trim() !== '';
 
 async function api(path, options) {
-  const res = await fetch(API + path, { cache: 'no-store', ...options });
+  const headers = { ...((options && options.headers) || {}) };
+  if (session.auth) headers['X-Device-Auth'] = session.auth;
+  const res = await fetch(API + path, { cache: 'no-store', ...options, headers });
   if (!res.ok) throw new Error(`${path} answered ${res.status}`);
   return res.json();
 }
@@ -185,8 +230,16 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    const [events, form] = await Promise.all([api('/Observation'), api('/api/form')]);
-    renderEvents(Array.isArray(events) ? events : []);
+    if (!session.auth && !(await unlock())) {
+      setStatus(false, 'Locked');
+      setLocked(true);
+      return;
+    }
+    // The VM only holds sealed blobs; decrypts happen here, with this device's key.
+    const raw = await api('/Observation');
+    const events = (await Promise.all(raw.map(decryptSealed))).filter(Boolean);
+    renderEvents(events);
+    const form = events.length ? null : await api('/api/form').catch(() => null);
     renderForm(form || {});
     setStatus(true, 'Live');
   } catch (err) {
@@ -241,7 +294,13 @@ $('logger-form').addEventListener('submit', async (ev) => {
   msg.className = 'form-msg';
   msg.textContent = 'Saving…';
   try {
-    await api('/Observation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    // Sealed with this device's key, so the VM stores it without ever reading it.
+    const sealed = await sealEvent(body);
+    await api('/Observation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event: { id: sealed.id, device: session.deviceId }, sealed: sealed.blob }),
+    });
     ev.target.reset();
     updateSev();
     msg.className = 'form-msg ok';
@@ -262,6 +321,23 @@ document.querySelectorAll('[data-export]').forEach((a) => {
   a.target = '_blank';
   a.rel = 'noopener';
 });
+
+// ---------- sealing in the browser (AES-GCM with the agent's key) ----------
+async function sealEvent(event) {
+  const id = 'evt-' + Date.now();
+  const full = { id, ts: new Date().toISOString(), ...event };
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(session.deviceId) },
+    session.aesKey, new TextEncoder().encode(JSON.stringify(full)));
+  return {
+    id,
+    blob: {
+      nonce: btoa(String.fromCharCode(...iv)),
+      ct: btoa(String.fromCharCode(...new Uint8Array(ct))),
+    },
+  };
+}
 
 // ---------- tabs ----------
 const VIEWS = ['overview', 'timeline', 'logger', 'export'];

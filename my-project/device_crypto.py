@@ -55,29 +55,29 @@ def encryption_key(secret: bytes) -> bytes:
     return hkdf.derive(secret)
 
 
-def _mac(secret: bytes, nonce: bytes, ct: bytes) -> bytes:
-    return hmac.new(secret, MAC_LABEL + nonce + ct, hashlib.sha256).digest()
-
-
 def seal(secret: bytes, plaintext: bytes) -> dict:
-    """Encrypt and authenticate. Only this device can produce or open it."""
+    """Encrypt and authenticate. Only this device can produce or open it.
+
+    The authentication is AES-GCM's own tag: no separate mac is stored, so a
+    browser that holds only the derived AES key can seal records too.
+    """
     nonce = os.urandom(NONCE_BYTES)
     aad = device_id(secret).encode()
     ct = AESGCM(encryption_key(secret)).encrypt(nonce, plaintext, aad)
-    mac = _mac(secret, nonce, ct)
     return {
         "nonce": base64.b64encode(nonce).decode(),
         "ct": base64.b64encode(ct).decode(),
-        "mac": mac.hex(),
     }
 
 
 def open_sealed(secret: bytes, sealed: dict) -> bytes:
-    """Verify the device mac, then decrypt. Raises ValueError if tampered."""
+    """Decrypt; raises ValueError if the blob was tampered with or not ours."""
+    from cryptography.exceptions import InvalidTag
+
     nonce = base64.b64decode(sealed["nonce"])
     ct = base64.b64decode(sealed["ct"])
-    expected = _mac(secret, nonce, ct)
-    if not hmac.compare_digest(expected.hex(), sealed.get("mac", "")):
-        raise ValueError("bad device mac: record was not written by this device")
     aad = device_id(secret).encode()
-    return AESGCM(encryption_key(secret)).decrypt(nonce, ct, aad)
+    try:
+        return AESGCM(encryption_key(secret)).decrypt(nonce, ct, aad)
+    except InvalidTag as exc:
+        raise ValueError("bad device tag: record was not written by this device") from exc
