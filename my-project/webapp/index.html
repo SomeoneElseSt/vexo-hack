@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Symptom Log</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#overview" aria-label="Symptom Log, overview">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 12h4l2-5 4 10 2-5h6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="brand-text">Symptom Log</span>
+      </a>
+      <nav class="tabs" aria-label="Sections">
+        <a href="#overview" data-tab="overview">Overview</a>
+        <a href="#timeline" data-tab="timeline">Timeline</a>
+        <a href="#logger" data-tab="logger">Log a symptom</a>
+        <a href="#export" data-tab="export">Export</a>
+      </nav>
+      <div class="status" id="status" role="status" aria-live="polite">
+        <span class="dot"></span><span class="status-text">Connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- 1. OVERVIEW -->
+    <section id="overview" class="view" aria-labelledby="overview-title">
+      <div class="hero">
+        <div>
+          <p class="eyebrow">Your health, in your words</p>
+          <h1 id="overview-title">Overview</h1>
+          <p class="lede">Symptoms you logged on your band, turned into a draft intake form for your doctor.</p>
+        </div>
+      </div>
+
+      <div class="tiles" id="tiles">
+        <div class="tile"><span class="tile-label">Events logged</span><span class="tile-value" id="t-count">–</span></div>
+        <div class="tile"><span class="tile-label">Highest severity</span><span class="tile-value" id="t-max">–</span></div>
+        <div class="tile"><span class="tile-label">From the band</span><span class="tile-value" id="t-band">–</span></div>
+        <div class="tile"><span class="tile-label">Last logged</span><span class="tile-value tile-value-sm" id="t-last">–</span></div>
+      </div>
+
+      <article class="card form-card" aria-labelledby="form-title">
+        <div class="form-card-head">
+          <div>
+            <h2 id="form-title">Intake form</h2>
+            <p class="muted" id="form-sub">Filled from your logged symptoms. Nothing here is a diagnosis.</p>
+          </div>
+          <div class="gate" id="gate">
+            <span class="gate-badge" id="gate-badge">Draft · awaiting doctor review</span>
+            <button type="button" class="btn btn-ghost" id="gate-btn">Mark as reviewed</button>
+          </div>
+        </div>
+        <dl class="form-grid">
+          <div class="field field-wide"><dt>Chief complaint</dt><dd id="f-cc" class="empty">Not enough information yet</dd></div>
+          <div class="field field-wide"><dt>History of present illness</dt><dd id="f-hpi" class="empty">Not enough information yet</dd></div>
+          <div class="field"><dt>Severity</dt><dd id="f-sev" class="empty">Not stated</dd></div>
+          <div class="field"><dt>Activity at onset</dt><dd id="f-act" class="empty">Not stated</dd></div>
+          <div class="field"><dt>Events used</dt><dd id="f-count" class="empty">0</dd></div>
+          <div class="field"><dt>Source</dt><dd id="f-src" class="empty">–</dd></div>
+        </dl>
+        <p class="fineprint">Review is marked in this browser only. Edit and save in your doctor's own system.</p>
+      </article>
+
+      <div class="recent">
+        <div class="section-head">
+          <h2>Most recent</h2>
+          <a href="#timeline" class="link">See full timeline →</a>
+        </div>
+        <ol class="events" id="recent-list"></ol>
+      </div>
+    </section>
+
+    <!-- 2. TIMELINE -->
+    <section id="timeline" class="view" aria-labelledby="timeline-title" hidden>
+      <div class="hero">
+        <div>
+          <p class="eyebrow">When it happened, and what you were doing</p>
+          <h1 id="timeline-title">Timeline</h1>
+          <p class="lede">Every symptom you logged, newest first, in your own words.</p>
+        </div>
+      </div>
+      <ol class="events events-full" id="timeline-list"></ol>
+    </section>
+
+    <!-- 3. LOGGER -->
+    <section id="logger" class="view" aria-labelledby="logger-title" hidden>
+      <div class="hero">
+        <div>
+          <p class="eyebrow">No band at hand? Type it in</p>
+          <h1 id="logger-title">Log a symptom</h1>
+          <p class="lede">Say it how you'd say it to a friend. Only the quote is required.</p>
+        </div>
+      </div>
+      <form class="card logger" id="logger-form" novalidate>
+        <label class="field-label" for="q">What are you feeling?</label>
+        <textarea id="q" name="verbatim_quote" rows="3" required
+          placeholder="e.g. Tight pressure in my chest walking up the stairs"></textarea>
+
+        <div class="row">
+          <div>
+            <label class="field-label" for="loc">Where</label>
+            <input id="loc" name="body_location" list="loc-list" placeholder="chest, head, stomach…" autocomplete="off">
+            <datalist id="loc-list"><option value="chest"><option value="head"><option value="stomach"><option value="back"><option value="throat"><option value="left arm"><option value="right arm"><option value="legs"></datalist>
+          </div>
+          <div>
+            <label class="field-label" for="qual">What it feels like</label>
+            <input id="qual" name="quality" list="qual-list" placeholder="pressure, sharp, dizzy…" autocomplete="off">
+            <datalist id="qual-list"><option value="pressure"><option value="sharp"><option value="dull ache"><option value="burning"><option value="dizzy"><option value="nausea"><option value="throbbing"><option value="tingling"></datalist>
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label class="field-label" for="act">What you were doing</label>
+            <input id="act" name="activity" placeholder="climbing stairs, lying down, after eating…" autocomplete="off">
+          </div>
+          <div>
+            <span class="field-label" id="sev-label">How bad (0–10)</span>
+            <div class="sev-wrap">
+              <input id="sev" type="range" min="0" max="10" step="1" value="5" aria-labelledby="sev-label" disabled>
+              <output id="sev-out" class="pill pill-none">Not stated</output>
+            </div>
+            <label class="check"><input type="checkbox" id="sev-on"> I want to give a number</label>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="submit" class="btn btn-primary" id="submit">Save to my log</button>
+          <span class="form-msg" id="form-msg" role="status" aria-live="polite"></span>
+        </div>
+      </form>
+    </section>
+
+    <!-- 4. EXPORT -->
+    <section id="export" class="view" aria-labelledby="export-title" hidden>
+      <div class="hero">
+        <div>
+          <p class="eyebrow">Your record, your call</p>
+          <h1 id="export-title">Export</h1>
+          <p class="lede">Take your log anywhere, in a format the other side understands.</p>
+        </div>
+      </div>
+      <div class="exports">
+        <a class="card export" data-export="/export/fhir" href="#export">
+          <span class="export-tag">FHIR</span>
+          <span class="export-title">For your doctor's system</span>
+          <span class="export-desc">The standard health records speak, so clinics can read each symptom as a structured observation.</span>
+        </a>
+        <a class="card export" data-export="/export/ips" href="#export">
+          <span class="export-tag">IPS</span>
+          <span class="export-title">For moving or travelling</span>
+          <span class="export-desc">An International Patient Summary: one portable file any doctor, in any country, can open.</span>
+        </a>
+        <a class="card export" data-export="/export/csv" href="#export">
+          <span class="export-tag">CSV</span>
+          <span class="export-title">For spreadsheets and research</span>
+          <span class="export-desc">One row per event. Open it in Excel or Numbers, or share it with a study you've joined.</span>
+        </a>
+        <a class="card export" data-export="/export/json" href="#export">
+          <span class="export-tag">JSON</span>
+          <span class="export-title">For your own backup</span>
+          <span class="export-desc">Everything, exactly as stored. Good for keeping a copy or moving to another app.</span>
+        </a>
+      </div>
+      <p class="fineprint" id="export-msg" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    Captured on a wearable, transcribed and structured by local models. Audio never leaves your devices.
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
