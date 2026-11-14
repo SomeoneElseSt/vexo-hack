@@ -39,14 +39,17 @@ DB_PATH = HERE / "data" / "records.db"
 LOCK = threading.Lock()
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS observation (
-  id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS sealed_record (
+  kind TEXT NOT NULL,
+  id TEXT NOT NULL,
   device TEXT NOT NULL,
   nonce TEXT NOT NULL,
   ct TEXT NOT NULL,
-  received_at TEXT NOT NULL
+  received_at TEXT NOT NULL,
+  PRIMARY KEY (kind, id)
 );
 """
+KINDS = ("Observation", "Encounter", "Communication", "MedicationRequest")
 
 
 SECRET = None  # the device secret, loaded at startup on this machine
@@ -56,18 +59,27 @@ def db() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # older DBs had a single observation table: carry it over, then drop it
+    has_old = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='observation'").fetchone()
     conn.execute(SCHEMA)
+    if has_old:
+        conn.execute(
+            "INSERT OR IGNORE INTO sealed_record (kind, id, device, nonce, ct, received_at) "
+            "SELECT 'Observation', id, device, nonce, ct, received_at FROM observation")
+        conn.execute("DROP TABLE observation")
+        conn.commit()
     return conn
 
 
-def rows() -> list[dict]:
-    """Decrypt and verify every record with this device's key.
+def rows(kind: str = "Observation") -> list[dict]:
+    """Decrypt and verify every record of this kind with this device's key.
 
     In vault mode (the VM) there is no key, so only opaque blobs are returned.
     """
     with db() as conn:
         sealed_rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM observation ORDER BY received_at")]
+            "SELECT * FROM sealed_record WHERE kind=? ORDER BY received_at", (kind,))]
     if SECRET is None:
         return [{"id": r["id"], "device": r["device"], "sealed": True,
                  "nonce": r["nonce"], "ct": r["ct"]}
@@ -83,12 +95,14 @@ def rows() -> list[dict]:
     return sorted(events, key=lambda e: e.get("ts") or "")
 
 
-def store(event: dict, sealed: dict | None) -> dict:
+def store(event: dict, sealed: dict | None, kind: str = "Observation") -> dict:
     """A record must arrive sealed by the owning device.
 
     Vault mode stores the ciphertext as-is and refuses plaintext: the VM can
     never read the records, only keep them for the device that can.
     """
+    if kind not in KINDS:
+        raise ValueError(f"unknown record kind {kind!r}")
     if SECRET is None and not sealed:
         raise ValueError("vault accepts only sealed records (no device key here)")
     event.setdefault("id", f"evt-{int(time.time() * 1000)}")
@@ -103,11 +117,12 @@ def store(event: dict, sealed: dict | None) -> dict:
         device = dc.device_id(SECRET)
     with LOCK, db() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO observation (id, device, nonce, ct, received_at) "
-            "VALUES (?,?,?,?,?)",
-            (event["id"], device, sealed["nonce"], sealed["ct"],
+            "INSERT OR REPLACE INTO sealed_record (kind, id, device, nonce, ct, received_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (kind, event["id"], device, sealed["nonce"], sealed["ct"],
              datetime.now(timezone.utc).isoformat()))
-    return {"id": event["id"], "device": device, "stored": "sealed" if SECRET is None else "ok"}
+    return {"id": event["id"], "kind": kind, "device": device,
+            "stored": "sealed" if SECRET is None else "ok"}
 
 
 def authorized(handler: BaseHTTPRequestHandler) -> bool:
@@ -122,6 +137,16 @@ def authorized(handler: BaseHTTPRequestHandler) -> bool:
 def hmac_compare(a: str, b: str) -> bool:
     import hmac
     return hmac.compare_digest(a.encode(), b.encode())
+
+
+KIND_PATHS = tuple("/" + k for k in KINDS)
+
+
+def kind_of(path: str) -> str | None:
+    for kind in KINDS:
+        if path == "/" + kind:
+            return kind
+    return None
 
 
 def to_fhir(event: dict) -> dict:
@@ -246,16 +271,17 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, PAGE.encode(), "text/html; charset=utf-8")
             return
-        if not path.startswith(("/Observation", "/api/", "/export/")):
+        if not path.startswith(KIND_PATHS + ("/api/", "/export/")):
             self._static(path)
             return
         if not authorized(self):
             self._send(401, b"device auth required", "text/plain")
             return
-        events = rows()
-        if path == "/Observation":
-            self._json(200, events)
+        kind = kind_of(path)
+        if kind and path.count("/") == 1:
+            self._json(200, rows(kind))
             return
+        events = rows()
         if path == "/export/json":
             self._json(200, events)
             return
@@ -268,6 +294,22 @@ class Handler(BaseHTTPRequestHandler):
                 pair = to_fhir(e)
                 entries += [{"resource": pair["observation"]},
                             {"resource": pair["provenance"]}]
+            for kind, resource_type in (("Encounter", "Encounter"),
+                                        ("Communication", "Communication"),
+                                        ("MedicationRequest", "MedicationRequest")):
+                for rec in rows(kind):
+                    res = {"resourceType": resource_type, "id": rec.get("id"),
+                           "meta": {"profile": ["http://hl7.org/fhir/StructureDefinition/"
+                                                + resource_type]}}
+                    for key in ("ts", "clinician", "specialty", "kind", "reason",
+                                "summary", "instructions", "follow_up", "thread",
+                                "from", "to", "sender", "body", "priority", "action",
+                                "name", "dose", "times", "prescribed_by", "visit_id",
+                                "start", "end", "confirmed_at", "confirmed_by",
+                                "medication_ids", "related_event_ids"):
+                        if key in rec:
+                            res[key if key != "ts" else "effectiveDateTime"] = rec[key]
+                    entries.append({"resource": res})
             self._json(200, {"resourceType": "Bundle", "type": "collection",
                              "entry": entries})
             return
@@ -299,7 +341,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.split("?")[0]
-        if path != "/Observation":
+        kind = kind_of(path) if path.count("/") == 1 else None
+        if not kind:
             self._send(404, b"not found", "text/plain")
             return
         if not authorized(self):
@@ -315,11 +358,11 @@ class Handler(BaseHTTPRequestHandler):
         event = body.get("event", body)
         sealed = body.get("sealed")
         try:
-            stored = store(event, sealed)
+            stored = store(event, sealed, kind)
         except ValueError as exc:
             self._send(403, str(exc).encode(), "text/plain")
             return
-        print("stored", stored.get("id"), flush=True)
+        print("stored", kind, stored.get("id"), flush=True)
         self._json(201, stored)
 
     def log_message(self, *args) -> None:
