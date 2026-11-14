@@ -90,6 +90,9 @@ class KeyHandler(BaseHTTPRequestHandler):
 
 # ---------- band pipeline ----------
 
+NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+             "nine", "ten", "out of"]
+
 EXTRACTION_PROMPT = """You extract a symptom event from a patient's spoken note.
 Return ONLY JSON with these keys:
   body_location: string or null      (e.g. "chest", "head", "stomach")
@@ -107,23 +110,44 @@ def transcribe(pcm: bytes) -> str:
     return " ".join(s.text.strip() for s in segments).strip()
 
 
-def extract(quote: str) -> dict:
+def _ask(endpoint: str, model: str, quote: str) -> dict:
+    """One extraction call. Raises on any failure so the caller can fall back."""
     payload = {
-        "model": OPTIONS.gemma,
+        "model": model,
         "messages": [
             {"role": "system", "content": EXTRACTION_PROMPT},
             {"role": "user", "content": quote},
         ],
         "format": "json", "temperature": 0, "stream": False,
     }
-    try:
-        r = requests.post(f"{OPTIONS.ollama}/chat/completions", json=payload, timeout=120)
-        r.raise_for_status()
-        parsed = json.loads(r.json()["choices"][0]["message"]["content"])
-    except Exception as exc:
-        print(f"extract skipped: {type(exc).__name__}: {exc}", flush=True)
-        return {}
-    return {k: parsed.get(k) for k in ("body_location", "quality", "severity", "activity")}
+    r = requests.post(f"{endpoint}/chat/completions", json=payload, timeout=120)
+    r.raise_for_status()
+    content = r.json()["choices"][0]["message"]["content"].strip()
+    if content.startswith("```"):          # models often fence JSON in markdown
+        content = content.strip("`")
+        content = content[content.find("{"):content.rfind("}") + 1]
+    parsed = json.loads(content)
+    fields = {k: parsed.get(k) for k in ("body_location", "quality", "severity", "activity")}
+    # severity is only kept when the patient actually said a number
+    if fields["severity"] is not None and not any(
+            w in quote.lower() for w in NUM_WORDS) and not any(c.isdigit() for c in quote):
+        fields["severity"] = None
+    return fields
+
+
+def extract(quote: str) -> tuple[dict, str | None]:
+    """Primary endpoint first, the fallback model only if it fails."""
+    attempts = [(OPTIONS.ollama, OPTIONS.gemma)]
+    if OPTIONS.ollama_fallback and OPTIONS.gemma_fallback:
+        attempts.append((OPTIONS.ollama_fallback, OPTIONS.gemma_fallback))
+    for endpoint, model in attempts:
+        try:
+            fields = _ask(endpoint, model, quote)
+            return fields, model
+        except Exception as exc:
+            print(f"extract failed on {model} @ {endpoint}: {type(exc).__name__}: {exc}",
+                  flush=True)
+    return {}, None
 
 
 def push_sealed(event: dict) -> None:
@@ -171,7 +195,7 @@ async def band_loop() -> None:
             quote = await asyncio.to_thread(transcribe, pcm)
             if not quote:
                 continue
-            fields = await asyncio.to_thread(extract, quote)
+            fields, used_model = await asyncio.to_thread(extract, quote)
             event = {
                 "schema_version": "0.1",
                 "id": f"evt-{int(time.time() * 1000)}",
@@ -180,7 +204,7 @@ async def band_loop() -> None:
                 "audio_seconds": round(len(pcm) / 2 / 16000, 2),
                 "verbatim_quote": quote,
                 "transcript_model": "faster-whisper-small",
-                "extract_model": OPTIONS.gemma if fields else None,
+                "extract_model": used_model if fields else None,
                 **fields,
             }
             await asyncio.to_thread(push_sealed, event)
@@ -198,6 +222,10 @@ def main() -> None:
     parser.add_argument("--records", default="http://localhost:8766")
     parser.add_argument("--ollama", default="http://localhost:11434/v1")
     parser.add_argument("--gemma", default="gemma3:12b")
+    parser.add_argument("--ollama-fallback", default="",
+                        help="secondary extraction endpoint, used if the primary fails")
+    parser.add_argument("--gemma-fallback", default="",
+                        help="secondary model name for the fallback endpoint")
     parser.add_argument("--whisper", default="/tmp/faster-whisper-small")
     parser.add_argument("--allow", nargs="*", default=["http://localhost:8766"])
     OPTIONS = parser.parse_args()
@@ -208,6 +236,8 @@ def main() -> None:
     print(f"local bridge on http://127.0.0.1:{OPTIONS.port}/ for device {dc.device_id(SECRET)}")
     print("allowed origins:", ", ".join(sorted(ALLOWED_ORIGINS)))
     print(f"records: {OPTIONS.records} | gemma: {OPTIONS.gemma} @ {OPTIONS.ollama}")
+    if OPTIONS.ollama_fallback:
+        print(f"fallback: {OPTIONS.gemma_fallback} @ {OPTIONS.ollama_fallback}")
     threading.Thread(
         target=lambda: ThreadingHTTPServer(("127.0.0.1", OPTIONS.port), KeyHandler).serve_forever(),
         daemon=True).start()
