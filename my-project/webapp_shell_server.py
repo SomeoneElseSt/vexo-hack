@@ -37,6 +37,8 @@ DB_PATH = HERE / "data" / "shell.db"
 SECRET = b""
 LOCK = threading.Lock()
 
+KINDS = ("Observation", "Encounter", "MedicationRequest")
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sealed_record (
   kind TEXT NOT NULL,
@@ -83,25 +85,86 @@ def demo_event(rng: random.Random, when: datetime) -> dict:
     }
 
 
+CLINICIANS = [("Dr. Ana Ruiz", "Cardiology"), ("Dr. Sam Okafor", "Primary Care"),
+              ("Dr. Lena Weiss", "Neurology"), ("Dr. Tom Iyer", "Orthopedics")]
+REASONS = ["chest tightness after exercise", "annual physical",
+           "follow-up: recurring headaches", "knee pain when climbing stairs"]
+
+
+def demo_visit(rng: random.Random, when: datetime, i: int) -> dict:
+    name, specialty = rng.choice(CLINICIANS)
+    return {
+        "id": f"enc-{i:02d}",
+        "ts": when.astimezone().isoformat(timespec="seconds"),
+        "kind": rng.choice(["in-person", "in-person", "video"]),
+        "clinician": name,
+        "specialty": specialty,
+        "reason": rng.choice(REASONS),
+        "summary": "Discussed symptoms, examined, no red flags. Keep logging and follow up if they worsen.",
+        "instructions": ["Continue logging symptoms on the band",
+                          "Return if the pain gets worse or you feel faint"],
+        "follow_up": (when + timedelta(days=rng.choice([14, 30, 60]))).date().isoformat(),
+    }
+
+
+def demo_medication(rng: random.Random, i: int) -> dict:
+    return {
+        "id": f"med-{i:02d}",
+        "name": rng.choice(["Ibuprofen", "Metoprolol", "Sumatriptan", "Omeprazole"]),
+        "dose": rng.choice(["200 mg", "25 mg", "50 mg", "20 mg"]),
+        "times": rng.choice([["08:00"], ["08:00", "20:00"], ["09:00"]]),
+        "instructions": "Take with food.",
+        "prescribed_by": "Dr. Sam Okafor",
+        "confirmed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "confirmed_by": "patient",
+    }
+
+
 def seed_if_empty() -> None:
     with LOCK, db() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM sealed_record").fetchone()[0]
-        if count:
-            return
+        # BEGIN IMMEDIATE: a second process waits here instead of seeding twice
+        conn.execute("BEGIN IMMEDIATE")
+        kinds = {row[0] for row in conn.execute(
+            "SELECT DISTINCT kind FROM sealed_record").fetchall()}
+        device = dc.device_id(SECRET)
         rng = random.Random(7)
         now = datetime.now(timezone.utc)
-        device = dc.device_id(SECRET)
-        for i in range(DEMO_EVENTS):
-            when = now - timedelta(days=rng.uniform(0, 30), hours=rng.uniform(0, 8))
-            event = demo_event(rng, when)
-            sealed = dc.seal(SECRET, json.dumps(event).encode())
-            conn.execute(
-                "INSERT OR REPLACE INTO sealed_record (kind, id, device, nonce, ct, received_at) "
-                "VALUES (?,?,?,?,?,?)",
-                ("Observation", event["id"], device, sealed["nonce"], sealed["ct"],
-                 when.isoformat()))
+        count = 0
+        if "Observation" not in kinds:
+            for i in range(DEMO_EVENTS):
+                when = now - timedelta(days=rng.uniform(0, 30), hours=rng.uniform(0, 8))
+                event = demo_event(rng, when)
+                sealed = dc.seal(SECRET, json.dumps(event).encode())
+                conn.execute(
+                    "INSERT OR REPLACE INTO sealed_record (kind, id, device, nonce, ct, received_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    ("Observation", event["id"], device, sealed["nonce"], sealed["ct"],
+                     when.isoformat()))
+                count += 1
+        if "Encounter" not in kinds:
+            for i in range(6):
+                when = now - timedelta(days=rng.uniform(-10, 45))
+                visit = demo_visit(rng, when, i)
+                sealed = dc.seal(SECRET, json.dumps(visit).encode())
+                conn.execute(
+                    "INSERT OR REPLACE INTO sealed_record (kind, id, device, nonce, ct, received_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    ("Encounter", visit["id"], device, sealed["nonce"], sealed["ct"],
+                     when.isoformat()))
+                count += 1
+        if "MedicationRequest" not in kinds:
+            for i in range(3):
+                med = demo_medication(rng, i)
+                sealed = dc.seal(SECRET, json.dumps(med).encode())
+                conn.execute(
+                    "INSERT OR REPLACE INTO sealed_record (kind, id, device, nonce, ct, received_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    ("MedicationRequest", med["id"], device, sealed["nonce"], sealed["ct"],
+                     now.isoformat()))
+                count += 1
         conn.commit()
-    print(f"seeded {DEMO_EVENTS} demo events into {DB_PATH}", flush=True)
+    if count:
+        print(f"seeded {count} demo records into {DB_PATH}", flush=True)
 
 
 # ---------- storage ----------
@@ -200,13 +263,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/device":
             self._json(200, {"device_id": dc.device_id(SECRET)})
             return
-        if path in ("/Observation", "/export/json", "/export/csv",
-                    "/export/fhir", "/export/ips", "/api/form"):
+        if path in tuple("/" + k for k in KINDS) + ("/export/json", "/export/csv",
+                                                   "/export/fhir", "/export/ips", "/api/form"):
             if not authorized(self):
                 self._send(401, b"device auth required", "text/plain")
                 return
-            if path == "/Observation":
-                self._json(200, sealed_rows())
+            if path.count("/") == 1 and path[1:] in KINDS:
+                self._json(200, sealed_rows(path[1:]))
             else:
                 self._export(path)
             return
@@ -215,7 +278,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         """A new sealed record from the browser (or another device)."""
         path = urlparse(self.path).path
-        if path != "/Observation":
+        kind = path[1:] if path.count("/") == 1 else ""
+        if kind not in KINDS:
             self._send(404, b"not found", "text/plain")
             return
         if not authorized(self):
@@ -237,10 +301,10 @@ class Handler(BaseHTTPRequestHandler):
             conn.execute(
                 "INSERT OR REPLACE INTO sealed_record (kind, id, device, nonce, ct, received_at) "
                 "VALUES (?,?,?,?,?,?)",
-                ("Observation", event["id"], device, sealed["nonce"], sealed["ct"],
+                (kind, event["id"], device, sealed["nonce"], sealed["ct"],
                  datetime.now(timezone.utc).isoformat()))
             conn.commit()
-        self._json(201, {"id": event["id"], "kind": "Observation",
+        self._json(201, {"id": event["id"], "kind": kind,
                          "device": device, "stored": "sealed"})
 
     def do_OPTIONS(self) -> None:
