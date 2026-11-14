@@ -1,0 +1,10 @@
+{
+  "name": "vexo-records-shell",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "python ../webapp_shell_server.py --port 8777",
+    "unlock": "python ../local_bridge.py --allow http://127.0.0.1:8777",
+    "check": "node --check app.js && node --check unlock.js"
+  }
+}
