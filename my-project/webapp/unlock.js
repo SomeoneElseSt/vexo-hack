@@ -107,6 +107,16 @@
 
   // ---------- record access ----------
 
+  function localIso(date) {
+    // the patient's own clock and offset are clinical context: never UTC "Z"
+    const pad = (n) => String(Math.abs(n)).padStart(2, '0');
+    const off = -date.getTimezoneOffset();
+    const sign = off >= 0 ? '+' : '-';
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+      + `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+      + `${sign}${pad(Math.trunc(off / 60))}:${pad(off % 60)}`;
+  }
+
   async function decryptOne(row) {
     if (!row || row.sealed !== true) return row;   // already plain
     if (!state.aesKey) return null;
@@ -122,8 +132,9 @@
   }
 
   async function sealEvent(event) {
+    if (!state.aesKey) throw new Error('locked: no device key');
     const id = event.id || ('evt-' + Date.now());
-    const full = { id, ts: new Date().toISOString(), ...event };
+    const full = { ...event, id, ts: event.ts || localIso(new Date()) };
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv, additionalData: enc.encode(state.deviceId) },
@@ -160,12 +171,17 @@
     document.body.appendChild(modal);
     state.modal = modal;
     const msg = (t) => { modal.querySelector('#unlock-msg').textContent = t; };
-    const close = () => { modal.remove(); state.modal = null; if (onDone) onDone(); };
+    const close = () => {
+      modal.remove();
+      state.modal = null;
+      window.dispatchEvent(new Event('vexo-unlocked'));
+      if (onDone) onDone();
+    };
 
     modal.querySelector('#unlock-try').onclick = async () => {
       msg('Looking for the local bridge…');
       if (await fromBridge()) { close(); return; }
-      msg('No local bridge on this machine. Paste your key instead, or start it with the command above.');
+      msg('No local bridge on this machine. Start it with the command above, or paste your key.');
     };
     modal.querySelector('#unlock-paste').onclick = async () => {
       const value = modal.querySelector('#unlock-key').value;
