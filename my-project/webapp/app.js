@@ -942,7 +942,7 @@ function severityChart() {
   const days = [];
   const now = new Date();
   for (let i = 13; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i); days.push(d); }
-  const W = 640, H = 120, pad = 22, bw = (W - pad) / 14;
+  const W = 940, H = 110, pad = 22, bw = (W - pad) / 14;
   const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('viewBox', `0 0 ${W} ${H + 22}`);
