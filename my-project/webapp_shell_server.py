@@ -1,7 +1,7 @@
 """Demo server for the records webapp shell (webapp-shell/).
 
 Serves the shell at / and the same sealed-record API shape as records_server.py:
-the browser never receives plaintext — it fetches sealed blobs and decrypts
+the browser never receives plaintext - it fetches sealed blobs and decrypts
 them with the device key (unlock.js, key via the local bridge).
 
 For the demo the database is seeded once with fake events, sealed with this
@@ -211,6 +211,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._export(path)
             return
         self._send(404, b"not found", "text/plain")
+
+    def do_POST(self) -> None:
+        """A new sealed record from the browser (or another device)."""
+        path = urlparse(self.path).path
+        if path != "/Observation":
+            self._send(404, b"not found", "text/plain")
+            return
+        if not authorized(self):
+            self._send(401, b"device auth required", "text/plain")
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            self._send(400, b"bad json", "text/plain")
+            return
+        event = body.get("event") or {}
+        sealed = body.get("sealed") or {}
+        if not event.get("id") or not sealed.get("nonce") or not sealed.get("ct"):
+            self._send(400, b"need event.id and sealed {nonce, ct}", "text/plain")
+            return
+        device = event.get("device") or dc.device_id(SECRET)
+        with LOCK, db() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO sealed_record (kind, id, device, nonce, ct, received_at) "
+                "VALUES (?,?,?,?,?,?)",
+                ("Observation", event["id"], device, sealed["nonce"], sealed["ct"],
+                 datetime.now(timezone.utc).isoformat()))
+            conn.commit()
+        self._json(201, {"id": event["id"], "kind": "Observation",
+                         "device": device, "stored": "sealed"})
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)

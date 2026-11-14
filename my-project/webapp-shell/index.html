@@ -10,45 +10,22 @@
   <div class="app">
     <aside class="sidebar" id="sidebar">
       <div class="side-top">
-        <span class="brand">
-          <span class="brand-mark" aria-hidden="true"></span>
-          <span class="brand-name">Vexo</span>
-        </span>
-        <button class="icon-btn collapse" id="collapse" title="Collapse sidebar" aria-label="Collapse sidebar">
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
+        <span class="brand">Vexo</span>
+        <button class="icon-btn" id="toggle" title="Collapse sidebar" aria-label="Collapse sidebar" aria-expanded="true"><span class="chevron">‹</span></button>
       </div>
       <nav class="nav" id="nav">
-        <button class="nav-item" data-view="overview">
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="3" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
-          <span>Overview</span>
-        </button>
-        <button class="nav-item" data-view="records">
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <span>Records</span>
-        </button>
-        <button class="nav-item" data-view="export">
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span>Export</span>
-        </button>
-        <button class="nav-item" data-view="settings">
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10l2 2M5 19l2-2m10-10l2-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <span>Settings</span>
-        </button>
+        <button class="nav-item" data-view="overview" title="Overview"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="3" y="3" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="3" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="14" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="14" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Overview</span></button>
+        <button class="nav-item" data-view="records" title="Records"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Records</span></button>
+        <button class="nav-item" data-view="export" title="Export"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Export</span></button>
+        <button class="nav-item" data-view="settings" title="Settings"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Settings</span></button>
       </nav>
-      <div class="side-foot">
-        <button class="icon-btn expand" id="expand" title="Expand sidebar" aria-label="Expand sidebar" hidden>
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-      </div>
     </aside>
 
     <div class="main">
       <header class="topbar">
         <h1 class="page-title" id="page-title">Overview</h1>
         <div class="topbar-right">
-          <span class="device-id muted small" id="device-id"></span>
-          <span class="status" id="status" data-state="decrypting">
+          <span class="status" id="status" data-state="decrypting" hidden>
             <span class="dot" aria-hidden="true"></span>
             <span class="status-label">Decrypting…</span>
           </span>
@@ -60,12 +37,8 @@
     </div>
   </div>
 
-  <footer class="foot">
-    <span>Self-hosted · your records stay sealed to your device</span>
-    <span class="muted" id="foot-device"></span>
-  </footer>
-
   <script src="/static/unlock.js"></script>
+  <script src="/static/body.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

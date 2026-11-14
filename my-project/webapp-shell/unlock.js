@@ -1,6 +1,6 @@
 // Device unlock for the symptom log. The records on the VM are sealed with a
 // key that never leaves the patient's device, so this file is what turns
-// ciphertext into readable events — in the browser, with WebCrypto.
+// ciphertext into readable events - in the browser, with WebCrypto.
 //
 // Where the key comes from, in order:
 //   1. the local bridge on this machine (http://127.0.0.1:8768/session), or
@@ -39,7 +39,7 @@
 
   async function deriveFromSecret(secretBytes) {
     const sha = await crypto.subtle.digest('SHA-256', secretBytes);
-    // base32(sha256(secret))[:16], lowercase — device id
+    // base32(sha256(secret))[:16], lowercase - device id
     const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
     const bytes = new Uint8Array(sha);
     let bits = 0, value = 0, b32 = '';
@@ -194,7 +194,7 @@
         await fromPaste(value);
         close();
       } catch (_) {
-        msg('That key did not work — check it and try again.');
+        msg('That key did not work - check it and try again.');
       }
     };
     modal.querySelector('#unlock-cancel').onclick = () => { modal.remove(); state.modal = null; };
