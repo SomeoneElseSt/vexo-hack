@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import device_crypto as dc
+
 HERE = Path(__file__).resolve().parent
 WEBAPP_DIR = HERE / "webapp"
 
@@ -39,20 +41,16 @@ LOCK = threading.Lock()
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS observation (
   id TEXT PRIMARY KEY,
-  ts TEXT NOT NULL,
-  source TEXT,
-  audio_seconds REAL,
-  body_location TEXT,
-  quality TEXT,
-  severity INTEGER,
-  activity TEXT,
-  verbatim_quote TEXT,
-  transcript_model TEXT,
-  extract_model TEXT,
-  schema_version TEXT,
+  device TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  ct TEXT NOT NULL,
+  mac TEXT NOT NULL,
   received_at TEXT NOT NULL
 );
 """
+
+
+SECRET = None  # the device secret, loaded at startup on this machine
 
 
 def db() -> sqlite3.Connection:
@@ -64,23 +62,47 @@ def db() -> sqlite3.Connection:
 
 
 def rows() -> list[dict]:
+    """Decrypt and verify every record with this device's key."""
     with db() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM observation ORDER BY ts")]
+        sealed_rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM observation ORDER BY received_at")]
+    events = []
+    for r in sealed_rows:
+        try:
+            plain = dc.open_sealed(SECRET, r)
+        except ValueError:
+            print("skipped record not signed by this device:", r["id"], flush=True)
+            continue
+        events.append(json.loads(plain))
+    return sorted(events, key=lambda e: e.get("ts") or "")
 
 
-def store(event: dict) -> dict:
+def store(event: dict, sealed: dict | None) -> dict:
+    """A record must arrive sealed by this device; the server only stores ciphertext."""
     event.setdefault("id", f"evt-{int(time.time() * 1000)}")
     event.setdefault("ts", datetime.now().astimezone().isoformat(timespec="seconds"))
-    fields = ["id", "ts", "source", "audio_seconds", "body_location", "quality",
-              "severity", "activity", "verbatim_quote", "transcript_model",
-              "extract_model", "schema_version"]
-    values = [event.get(f) for f in fields] + [datetime.now(timezone.utc).isoformat()]
-    placeholders = ",".join("?" * (len(fields) + 1))
+    plain = json.dumps(event).encode()
+    sealed = sealed or dc.seal(SECRET, plain)
+    if dc.open_sealed(SECRET, sealed) != plain:
+        raise ValueError("sealed record does not match its content")
     with LOCK, db() as conn:
         conn.execute(
-            f"INSERT OR REPLACE INTO observation ({','.join(fields)}, received_at) "
-            f"VALUES ({placeholders})", values)
+            "INSERT OR REPLACE INTO observation (id, device, nonce, ct, mac, received_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (event["id"], dc.device_id(SECRET), sealed["nonce"], sealed["ct"],
+             sealed["mac"], datetime.now(timezone.utc).isoformat()))
     return event
+
+
+def authorized(handler: BaseHTTPRequestHandler) -> bool:
+    """The caller must prove it holds the device secret."""
+    presented = handler.headers.get("X-Device-Auth") or ""
+    return hmac_compare(presented, dc.auth_token(SECRET))
+
+
+def hmac_compare(a: str, b: str) -> bool:
+    import hmac
+    return hmac.compare_digest(a.encode(), b.encode())
 
 
 def to_fhir(event: dict) -> dict:
@@ -197,17 +219,31 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?")[0]
+        index = WEBAPP_DIR / "index.html"
+        if path in ("/", "/index.html"):
+            # the dashboard shell is public: it holds no patient data by itself
+            if index.exists():
+                self._send(200, index.read_bytes(), "text/html; charset=utf-8")
+            else:
+                self._send(200, PAGE.encode(), "text/html; charset=utf-8")
+            return
+        if not path.startswith(("/Observation", "/api/", "/export/")):
+            self._static(path)
+            return
+        if not authorized(self):
+            self._send(401, b"device auth required", "text/plain")
+            return
+        events = rows()
         if path == "/Observation":
-            self._json(200, rows())
+            self._json(200, events)
             return
         if path == "/export/json":
-            self._json(200, rows())
+            self._json(200, events)
             return
         if path == "/export/csv":
-            self._send(200, to_csv(rows()).encode(), "text/csv")
+            self._send(200, to_csv(events).encode(), "text/csv")
             return
         if path == "/export/fhir":
-            events = rows()
             entries = []
             for e in events:
                 pair = to_fhir(e)
@@ -217,42 +253,54 @@ class Handler(BaseHTTPRequestHandler):
                              "entry": entries})
             return
         if path == "/export/ips":
-            self._json(200, to_ips(rows()))
+            self._json(200, to_ips(events))
             return
         if path == "/api/form":
-            self._json(200, intake_form(rows()))
+            self._json(200, intake_form(events))
             return
-        if path in ("/", "/index.html"):
-            index = WEBAPP_DIR / "index.html"
-            if index.exists():
-                self._send(200, index.read_bytes(), "text/html; charset=utf-8")
-            else:
-                self._send(200, PAGE.encode(), "text/html; charset=utf-8")
+        if path == "/api/device":
+            # lets the browser check a key before asking for the records
+            self._json(200, {"device_id": dc.device_id(SECRET)})
             return
-        if WEBAPP_DIR.exists():
-            target = (WEBAPP_DIR / path.lstrip("/")).resolve()
-            if str(target).startswith(str(WEBAPP_DIR)) and target.is_file():
-                ctype = {"css": "text/css", "js": "application/javascript",
-                         "html": "text/html; charset=utf-8",
-                         "svg": "image/svg+xml", "png": "image/png"}.get(
-                    target.suffix.lstrip("."), "application/octet-stream")
-                self._send(200, target.read_bytes(), ctype)
-                return
         self._send(404, b"not found", "text/plain")
+
+    def _static(self, path: str) -> None:
+        if not WEBAPP_DIR.exists():
+            self._send(404, b"not found", "text/plain")
+            return
+        target = (WEBAPP_DIR / path.lstrip("/")).resolve()
+        if not str(target).startswith(str(WEBAPP_DIR)) or not target.is_file():
+            self._send(404, b"not found", "text/plain")
+            return
+        ctype = {"css": "text/css", "js": "application/javascript",
+                 "html": "text/html; charset=utf-8", "svg": "image/svg+xml",
+                 "png": "image/png"}.get(target.suffix.lstrip("."),
+                                         "application/octet-stream")
+        self._send(200, target.read_bytes(), ctype)
 
     def do_POST(self) -> None:
         path = self.path.split("?")[0]
         if path != "/Observation":
             self._send(404, b"not found", "text/plain")
             return
+        if not authorized(self):
+            self._send(401, b"device auth required", "text/plain")
+            return
         length = int(self.headers.get("Content-Length", 0))
         try:
-            event = json.loads(self.rfile.read(length) or b"{}")
+            body = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             self._send(400, b"bad json", "text/plain")
             return
-        stored = store(event)
-        print("stored", stored.get("id"), (stored.get("verbatim_quote") or "")[:60], flush=True)
+        # two shapes: a plain event (sealed here) or {event, sealed} from another device
+        event = body.get("event", body)
+        sealed = body.get("sealed")
+        try:
+            stored = store(event, sealed)
+        except ValueError as exc:
+            self._send(403, str(exc).encode(), "text/plain")
+            return
+        print("stored", stored.get("id"), flush=True)
         self._json(201, stored)
 
     def log_message(self, *args) -> None:
@@ -260,13 +308,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global DB_PATH
+    global DB_PATH, SECRET
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--data-dir", default=str(HERE / "data"))
     args = parser.parse_args()
     DB_PATH = Path(args.data_dir) / "records.db"
-    print(f"records server on http://0.0.0.0:{args.port}/ (sqlite {DB_PATH})", flush=True)
+    SECRET = dc.load_or_create_secret()
+    print(f"records server on http://0.0.0.0:{args.port}/ (sqlite {DB_PATH})")
+    print(f"device id: {dc.device_id(SECRET)} — key in {dc.KEY_FILE}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()
 
 
