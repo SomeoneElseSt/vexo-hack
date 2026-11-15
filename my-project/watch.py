@@ -29,6 +29,9 @@ STREAM_LOG = Path("/tmp/stream.jsonl")
 API_LOG = Path("/tmp/api.jsonl")
 
 INTENTS = ("symptom", "dose", "message", "visit", "other")
+# the demo story: what was transcribed, what was classified, what was written
+KEEP = ("words", "transcript", "window", "queued", "gate", "route", "model",
+        "error", "band_event")
 ROUTE = {"symptom": "/Observation", "dose": "/MedicationAdministration",
          "message": "/Communication", "visit": "/Communication"}
 
@@ -230,8 +233,14 @@ def follow(path: Path, offset: int) -> int:
                 entry = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            render = RENDER.get(entry.get("type")) or line_generic
-            if entry.get("type") == "words" and not entry.get("so_far", "").count(" "):
+            kind = entry.get("type")
+            # a GET from the sync or the page is noise in a demo; a POST wrote a record
+            if kind == "api" and (entry.get("method") != "POST" or not entry.get("id")):
+                continue
+            if kind not in KEEP and kind != "api":
+                continue
+            render = RENDER.get(kind) or line_generic
+            if kind == "words" and entry.get("so_far", "").count(" ") == 0:
                 print(separator(entry.get("t", "")), flush=True)
                 print(separator(entry.get("t", "")), flush=True)
             print("  " + render(entry), flush=True)
