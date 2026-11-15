@@ -73,6 +73,7 @@ def vm_ids(session: requests.Session, host: str, headers: dict) -> dict[str, set
 
 
 SYNC_INTERVAL = 1
+SIGNED_URL_REFRESH = 12 * 3600   # re-sign every 12 h; the token itself is valid 24 h
 
 
 def main() -> None:
@@ -88,8 +89,8 @@ def main() -> None:
         signed_at = 0.0
         while True:
             try:
-                # the signed URL lasts an hour: refresh it every 10 min, not every tick
-                if session is None or time.time() - signed_at > 600:
+                # the signed URL lives 24 h: refresh it every 12 h, not every tick
+                if session is None or time.time() - signed_at > SIGNED_URL_REFRESH:
                     session, host = vm_session()
                     signed_at = time.time()
                 sync_once(args.local, session, host)
