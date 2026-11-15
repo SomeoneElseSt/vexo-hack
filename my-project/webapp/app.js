@@ -1,4 +1,4 @@
-// Symptom Log frontend. Plain JS, no build step.
+// Vexal frontend. Plain JS, no build step.
 // Laid out like MyChart (Home, Visits with After Visit Summary, Medications, Health Summary),
 // using the terms clinicians already use (chief complaint, HPI, location, quality, severity, context).
 // Everything shown comes from the records server; nothing is invented here.
@@ -1388,7 +1388,7 @@ function route() {
     const on = DESKTOP && a.closest('.side') ? a.dataset.tab === (name === 'share' ? 'share' : cfg.tab) : a.dataset.tab === cfg.tab;
     if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
-  if (DESKTOP) { $('desk-main').scrollTop = 0; document.title = (cfg.title || 'Home') + ' · Symptom Log'; }
+  if (DESKTOP) { $('desk-main').scrollTop = 0; document.title = (cfg.title || 'Home') + ' · Vexal'; }
   const sub = name !== 'home';
   $('topbar').classList.toggle('sub', sub);
   $('navbar').hidden = !sub;
