@@ -646,239 +646,100 @@ body.desktop .grab { display: none; }
 #dc-meds .row-sub { white-space: normal; }
 #dc-meds .drow-end { flex-direction: row; align-items: baseline; gap: 10px; margin-top: auto; }
 
-/* ===================== show, don't tell ===================== */
-/* severity ring */
-.ring { --ring: 34px; position: relative; width: var(--ring); height: var(--ring); flex: none; display: inline-grid; place-items: center; }
-.ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
-.ring .track { fill: none; stroke: #e9edf1; stroke-width: 3.5; }
-.ring .arc { fill: none; stroke-width: 3.5; stroke-linecap: round; }
-.ring b { position: relative; font-size: calc(var(--ring) * .38); font-weight: 700; font-variant-numeric: tabular-nums; }
-.ring.low .arc { stroke: #3f9f6c; } .ring.low b { color: #2b7a50; }
-.ring.mid .arc { stroke: #e0962e; } .ring.mid b { color: #a8650a; }
-.ring.high .arc { stroke: #d4574c; } .ring.high b { color: #b23a30; }
-.ring.none .track { stroke-dasharray: 3 3.5; } .ring.none b { color: var(--ink-3); font-weight: 500; }
+/* ---------- body figure ---------- */
+.bodyfig { flex: none; }
+.bodyfig-shape { fill: #dde6ec; }
+.bodyfig-halo { fill: rgba(194, 65, 93, .22); }
+.bodyfig-dot { fill: #c2415d; }
+.fig-row { width: 22px; height: 44px; }
+.fig-sheet { width: 64px; height: 128px; margin: 4px 6px 0 2px; }
+.fig-card { width: 96px; height: 192px; }
+.hpi-with-fig { display: flex; gap: 12px; align-items: flex-start; }
+.hpi-with-fig .group { flex: 1; min-width: 0; }
+.bodycard { flex: 1; display: flex; align-items: center; gap: 20px; }
+.bodylist { list-style: none; padding: 0; flex: 1; display: grid; gap: 12px; min-width: 0; }
+.bodylist li { display: grid; grid-template-columns: 74px 1fr 22px; align-items: center; gap: 10px; font-size: 14.5px; }
+.bodylist b { text-align: right; font-variant-numeric: tabular-nums; }
+.bodybar { height: 8px; border-radius: 4px; background: #eef2f5; overflow: hidden; }
+.bodybar i { display: block; height: 100%; border-radius: 4px; background: #c2415d; }
+.bodylist li.muted .bodyname { color: var(--ink-3); }
 
-/* symptom rows: body icon · title/context · time · ring */
-.loc-ico { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; background: #fce8ec; color: #c2415d; }
-.loc-ico svg { width: 19px; height: 19px; }
-.srow { gap: 12px; }
-.srow .row-title { font-size: 15px; }
-.srow-end { display: flex; align-items: center; gap: 6px; flex: none; }
-.srow-end .row-meta { font-variant-numeric: tabular-nums; }
-.src { color: var(--ink-3); display: inline-grid; }
-.src svg { width: 14px; height: 14px; }
-.dlist .srow { padding: 9px 4px; min-height: 0; border-radius: 10px; }
-.dlist .srow + .srow { border-top: .5px solid var(--sep); border-radius: 0; }
-.dlist .srow::before { display: none; }
-.dlist .srow:hover { background: #f5f8fa; }
+/* ---------- quieter Home ---------- */
+.dash-hello { margin-bottom: 16px; }
+.dcard { min-height: 0; }
+.drow .sev { margin-left: auto; }
+.row-meta.warn { color: var(--mid); }
+.dempty span:empty { display: none; }
+.ev { gap: 2px; padding: 10px 14px; }
 
-/* medication dose chips + 7-day strip */
-.chips-dose { display: flex; gap: 6px; flex-wrap: wrap; }
-.dchip { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 14px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; border: 1.5px solid #d8e0e6; color: var(--ink-2); background: #fff; }
-.dchip svg { width: 14px; height: 14px; }
-.dchip.taken { background: #e3f4e9; border-color: #e3f4e9; color: #1e7a45; }
-.dchip.missed { border-color: #f0c98c; color: #9a5a00; background: #fff8ec; }
-.dchip.due { color: var(--ink); }
-.dchip.asneeded { border-style: dashed; font-weight: 500; }
-.week { display: inline-flex; gap: 3px; }
-.week i { width: 10px; height: 10px; border-radius: 3px; background: #e6ebef; }
-.week i.on { background: #3f9f6c; }
+/* ---------- share: recommended format ---------- */
+#share-flow .segmented { margin-top: 0; }
+.fmt-tag { width: 46px; height: 30px; border-radius: 7px; display: grid; place-items: center; flex: none; background: #e6f1f3; color: var(--tint); font-size: 11.5px; font-weight: 800; letter-spacing: .04em; }
+.fmt-primary { padding-top: 14px; padding-bottom: 14px; }
+.fmt-primary .fmt-tag { background: var(--tint); color: #fff; }
+.fig-row { width: 26px; height: 52px; }
+.fig-row .bodyfig-halo { fill: rgba(194, 65, 93, .3); }
 
-/* medications screen rows */
-.med { padding: 14px 16px; display: grid; gap: 10px; }
-.med-top { display: flex; align-items: center; gap: 12px; }
-.med-ico { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; flex: none; background: #fdf0df; color: #b5650a; }
-.med-ico svg { width: 21px; height: 21px; }
-.med-name { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 16px; }
-.med-name b { font-weight: 650; }
-.med-dose { font-size: 13.5px; color: var(--ink-2); }
-.med-sig { font-size: 13.5px; color: var(--ink-2); margin-top: 1px; }
-.med-ok { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: #e3f4e9; color: #1e7a45; flex: none; margin-left: auto; }
-.med-ok svg { width: 15px; height: 15px; }
-.med-top .btn { margin-left: auto; }
-.med-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-left: 50px; }
-.med-week { display: inline-flex; align-items: center; gap: 7px; }
-.med-week-l { font-size: 12px; color: var(--ink-3); }
-.btn-take { margin-left: auto; height: 30px; padding: 0 12px; border-radius: 15px; font-size: 13.5px; }
-.med-meta { font-size: 12px; color: var(--ink-3); padding-left: 50px; margin: 0; }
-.med.to-review { background: #fffcf6; }
-.med-foot, .med-flag { display: none; }
-
-/* to do rows with chips */
-.todo-row .row-main { gap: 5px; }
-.tchips { display: flex; gap: 5px; flex-wrap: wrap; }
-.tchip { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 10px; background: #eef3f6; color: var(--ink-2); }
-.tchip.warn { background: #fdf0df; color: #9a5a00; }
-
-/* glance: latest symptom as a ring */
-.glance-ring { display: flex; align-items: center; gap: 12px; margin-top: 2px; }
-.glance-ring-t { display: flex; flex-direction: column; min-width: 0; }
-.glance-ring-t b { font-size: 16px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.glance-ring-t span { font-size: 13px; color: var(--ink-2); }
-.dmini .glance-sub:empty { display: none; }
-
-/* upcoming visits hero */
-.dhero-main { align-items: center; }
-.dhero-main .btn { margin-left: auto; align-self: center; }
-.dhero-text h3 { font-size: 28px; }
-.dhero-meta { flex-direction: row; gap: 16px; flex-wrap: wrap; }
-.dhero-more { flex-direction: row; gap: 10px; border-top: 0; padding-top: 0; margin-top: 18px; }
-.dhero-next { display: flex; align-items: center; gap: 10px; padding: 8px 12px 8px 8px; border-radius: 12px; background: rgba(255, 255, 255, .12); font-size: 13.5px; color: #fff; }
-.dhero-next:hover { background: rgba(255, 255, 255, .2); }
-.mini-date { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 9px; background: #fff; color: #0b525d; line-height: 1; }
-.mini-date b { font-size: 16px; }
-.mini-date span { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-top: 1px; }
-.dhero-actions { display: none; }
-
-/* medication tiles on Home */
-#dc-meds .mtile { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
-.mtile-top { display: flex; align-items: center; gap: 10px; }
-.mtile-top .row-title { font-size: 15px; }
-.mtile .tchip.warn { margin-left: auto; }
-.mtile.to-review { background: #fffcf6 !important; border-color: #f3dfbd !important; }
-
-/* past visit facts */
-.dvisit { padding: 2px 0; }
-.dvisit-title { color: var(--ink); }
-.vfacts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
-.vfact { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border-radius: 12px; background: #f5f8fa; font-size: 12px; color: var(--ink-2); }
-.vfact svg { width: 16px; height: 16px; color: var(--tint); margin-bottom: 2px; }
-.vfact b { font-size: 18px; color: var(--ink); font-weight: 700; }
-.dash-hello p { font-size: 14px; color: var(--ink-3); }
-.vfact b { font-size: 16px; white-space: nowrap; }
-.dash-grid .span3 { grid-column: 1 / -1; min-height: 0; }
-.dhero-more .mini-date b { min-width: 0; color: #0b525d; display: block; }
-
-/* Upcoming Visits as an EHR appointment table */
-.appt-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.appt-table th { text-align: left; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); padding: 8px 12px; background: #f3f6f8; border-top: 1px solid #e3e8ec; border-bottom: 1px solid #e3e8ec; }
-.appt-table td { padding: 11px 12px; border-bottom: 1px solid #edf1f4; color: var(--ink); white-space: nowrap; }
-.appt-table tbody tr { cursor: pointer; }
-.appt-table tbody tr:hover td { background: #f7fafb; }
-.appt-table tr.next td { font-weight: 600; }
-.appt-table tr.next td:first-child { box-shadow: inset 3px 0 0 var(--tint); }
-.appt-table .c-time { font-variant-numeric: tabular-nums; }
-.appt-table .c-dept { color: var(--ink-2); font-weight: 400; }
-.appt-table .c-act { text-align: right; }
-.appt-table .c-act a { color: var(--tint); font-weight: 600; }
-.appt-table tbody tr:last-child td { border-bottom: 0; }
-
-/* ===================== clinical look (desktop + phone) =====================
-   One accent (teal) for actions and links, neutral grays for everything else,
-   red only to flag high severity (7-10), like an abnormal lab flag. */
-:root { --flag: #b42318; }
-
-/* layout: chart + to do, then symptoms + medications */
-#dc-symptoms { grid-column: span 2; order: 10; }
-#dc-meds { grid-column: auto; order: 11; }
-#dc-meds .dlist { display: flex; flex-direction: column; gap: 0; }
-#dc-meds .drow { flex-direction: column; align-items: stretch; padding: 12px 2px; border: 0; border-radius: 0; background: none; }
-#dc-meds .drow + .drow { border-top: 1px solid var(--sep); border-radius: 0; }
-#dc-meds .mtile.to-review { background: none !important; border-color: transparent !important; }
-
-/* neutral icon squares everywhere */
-.drow-ico, .drow-ico.rose, .drow-ico.amber, .loc-ico, .med-ico, .glance-ico, .tile-ico, .row-ico { background: #f1f4f6 !important; color: #5b6b75 !important; }
-
-/* severity: gray ring, dark number; red only when high */
-.ring .arc, .ring.low .arc, .ring.mid .arc { stroke: #6b7c86; }
-.ring b, .ring.low b, .ring.mid b { color: var(--ink); }
-.ring.high .arc { stroke: var(--flag); }
-.ring.high b { color: var(--flag); }
-.sev.low, .sev.mid { color: var(--ink); }
-.sev.high { color: var(--flag); }
-
-/* chart: one color, red bars only for high days */
-.chart-svg .bar.low, .chart-svg .bar.mid { fill: #6f8b96; }
-.chart-svg .bar.high { fill: var(--flag); }
-.chart-svg .bar.none { fill: #d5dce1; }
-.legend { display: none; }
-
-/* chips and tags: gray, with the state shown by an icon */
-.tchip, .tchip.warn { background: #f1f4f6; color: var(--ink-2); }
-.dchip.taken { background: #f1f4f6; border-color: #f1f4f6; color: var(--ink); }
-.dchip.missed { background: #fff; border-color: #d6dde2; color: var(--ink-2); border-style: dashed; }
-.med-ok { background: none; color: var(--ink-2); }
-.week i.on { background: #6f8b96; }
-.med.to-review { background: none; }
-.mtile .tchip.warn { color: var(--ink); }
-
-/* right rail: plain list rows instead of colored cards */
-.ev, .ev.symptom, .ev.visit, .ev.followup, .ev.dose { background: none; border-radius: 0; margin: 0; padding: 10px 2px; border-bottom: 1px solid var(--sep); }
-.ev .ev-top, .ev.symptom .ev-top, .ev.visit .ev-top, .ev.followup .ev-top, .ev.dose .ev-top { color: var(--ink); font-weight: 600; }
-.ev .ev-top svg { color: #6b7c86; }
-.ev:hover { transform: none; background: #f7f9fa; }
-.dot.symptom, .dot.visit, .dot.followup, .dot.dose { background: #8a9aa3; opacity: 1; }
-.cal-day.sel { background: #e8eef1; color: var(--ink); }
-.avatar-ini { background: #e8eef1; color: var(--ink); }
-
-/* sidebar: quieter */
-.side { background: #12343b; box-shadow: none; }
-.side-badge, .tab-badge { background: #5b6b75; }
-
-/* phone home: drop the tinted tiles and gradient */
-.home-hero { background: linear-gradient(180deg, #10636e 0%, #10636e 60%, var(--bg) 100%); }
-.home-hero::after { display: none; }
-.tile-ico { background: none !important; color: var(--tint) !important; }
-
-/* ===================== minimal Home ===================== */
-/* chart only; no number tiles */
-#dc-trend .dstats { display: none; }
-#dc-trend .chart-svg .axis { fill: #a9b4bb; }
-/* one line per item */
-.dash-grid .todo-row .tchips,
-#dc-symptoms .row-sub, #dc-symptoms .src,
-#dc-meds .row-sub, #dc-meds .week, #dc-meds .med-ok, #dc-meds .tchip { display: none; }
-#dc-meds .drow { flex-direction: row; align-items: center; padding: 10px 2px; }
-#dc-meds .mtile-top { flex: 1; min-width: 0; }
-#dc-meds .chips-dose { flex: none; }
-#dc-meds .drow-ico { display: none; }
-#dc-symptoms .srow { padding: 8px 4px; }
-#dc-symptoms .loc-ico { width: 30px; height: 30px; }
-.dash-grid .drow-ico { width: 30px; height: 30px; }
-.dcard { padding: 18px 20px; }
-.dcard-head { margin-bottom: 6px; }
-.dcard-head h2 { font-size: 16px; }
-.dash-hello h1 { font-size: 26px; }
-/* rail: calendar + that day's items as single lines; no care team */
-.rail .ev-sub, .rail #care-team, .rail .cal-sel { display: none; }
-.rail .ev { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 2px; }
-.rail .ev-top { font-weight: 500; font-size: 14px; }
-.rail .ev-time { font-weight: 500; color: var(--ink-2); font-size: 13px; white-space: nowrap; }
-.rail #cal-day { margin-top: 14px; border-top: 1px solid var(--sep); }
-
-/* ===================== Overview without cards =====================
-   Content sits on the page. Chart runs full width; below it a wide
-   symptom list and a narrow column (To Do, Medications). */
-.dash-grid {
-  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
-  grid-template-areas: "trend trend" "symptoms todo" "symptoms meds";
-  grid-template-rows: auto auto 1fr;
-  column-gap: 48px; row-gap: 28px;
+/* ===== calendar: hide / show ===== */
+.desk { position: relative; transition: grid-template-columns .3s cubic-bezier(.2, .8, .2, 1); }
+.desk.rail-off { grid-template-columns: 88px minmax(0, 1fr) 0; }
+.desk.rail-off .rail { padding: 0; overflow: hidden; visibility: hidden; }
+.rail-toggle {
+  position: absolute; z-index: 4; top: 22px; right: 322px; width: 36px; height: 36px; border-radius: 50%;
+  border: 1px solid var(--sep); background: #fff; color: var(--ink-2); display: grid; place-items: center; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(16, 40, 60, .08); transition: right .3s cubic-bezier(.2, .8, .2, 1), color .15s;
 }
-.dash-grid > .dcard {
-  background: none; box-shadow: none; border-radius: 0; padding: 0; min-height: 0; order: 0;
+.rail-toggle:hover { color: var(--ink); }
+.rail-toggle svg { width: 18px; height: 18px; transition: transform .3s; }
+.desk.rail-off .rail-toggle { right: 18px; }
+.desk.rail-off .rail-toggle svg { transform: rotate(180deg); }
+@media (max-width: 1280px) { .rail-toggle { right: 282px; } }
+@media (prefers-reduced-motion: reduce) { .desk, .rail-toggle, .rail-toggle svg { transition: none; } }
+
+/* ===== calm, accessible palette =====
+   One teal family plus neutrals. Meaning is carried by text, icons and
+   lightness, never by hue alone; one muted red is kept for "needs attention". */
+:root {
+  --action: #0f5f6b; --action-press: #0b4b55;
+  --high: #9e2a22;   /* 7.9:1 on white */
+  --mid: #3c4a52;    /* 9.6:1 */
+  --low: #5b6870;    /* 5.7:1 */
+  --calm-1: #d6e2e5; --calm-2: #9fbec4; --calm-3: #4f8790; --calm-4: #1d4f58;
+  --calm-bg: #eef3f4;
 }
-#dc-trend { grid-area: trend; grid-column: auto; padding-bottom: 22px !important; border-bottom: 1px solid #e3e8ec !important; }
-#dc-symptoms { grid-area: symptoms; grid-column: auto; }
-#dc-todo { grid-area: todo; }
-#dc-meds { grid-area: meds; grid-column: auto; }
-.dash-grid .dcard-head { margin-bottom: 8px; }
-.dash-grid .dcard-head h2 { font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
-.dash-grid .dcard-head a { font-size: 13px; }
-#dc-trend .chart-svg { max-height: 170px; }
-#dc-trend .chart { gap: 0; }
-/* rows sit on the page: hairlines only, hover stays subtle */
-.dash-grid .dlist .srow:hover, .dash-grid .drow:hover { background: rgba(255, 255, 255, .7); }
-.dash-grid .dlist .srow, .dash-grid .drow { padding-left: 0; padding-right: 0; }
-.dash-grid .dlist .srow + .srow, .dash-grid .drow + .drow { border-top: 1px solid #e3e8ec; }
-#dc-symptoms .srow { padding-top: 12px; padding-bottom: 12px; }
-#dc-symptoms .row-title { font-size: 15.5px; }
-#dc-todo .drow { padding-top: 10px; padding-bottom: 10px; }
-.dash-grid .dempty { min-height: 90px; align-items: flex-start; text-align: left; }
-.dash-grid .dempty svg { display: none; }
-.dash-hello { margin-bottom: 18px; }
-#dc-trend { grid-column: 1 / -1; grid-row: 1; }
-#dc-symptoms { grid-column: 1; grid-row: 2 / span 2; }
-#dc-todo { grid-column: 2; grid-row: 2; }
-#dc-meds { grid-column: 2; grid-row: 3; }
-#dc-trend .chart-svg { max-height: 190px; }
+[data-hue] { --hue: #2f5d66; --hue-bg: var(--calm-bg); }
+.sev.low, .sev.mid { font-weight: 600; }
+.row-meta.warn { color: var(--high); }
+
+/* chart: severity as a light-to-dark scale (works in greyscale and for colour-blind readers) */
+.chart-svg .bar.none, .sw.none { fill: #e3e8eb; background: #e3e8eb; }
+.chart-svg .bar.low, .sw.low { fill: var(--calm-2); background: var(--calm-2); }
+.chart-svg .bar.mid, .sw.mid { fill: var(--calm-3); background: var(--calm-3); }
+.chart-svg .bar.high, .sw.high { fill: var(--calm-4); background: var(--calm-4); }
+
+/* calendar dots and day cards: neutral cards, kind shown by icon and label */
+.dot.symptom { background: var(--calm-4); }
+.dot.visit { background: var(--calm-3); }
+.dot.followup { background: transparent; box-shadow: inset 0 0 0 1.5px var(--calm-3); opacity: 1; }
+.dot.dose { background: var(--calm-2); }
+.ev { background: #f5f7f8 !important; border-left: 3px solid var(--calm-2); border-radius: 4px 12px 12px 4px; }
+.ev.symptom { border-left-color: var(--calm-4); }
+.ev.visit, .ev.followup { border-left-color: var(--calm-3); }
+.ev .ev-top { color: var(--ink) !important; }
+.ev .ev-top svg { color: var(--calm-3); }
+
+/* icons and figures */
+.drow-ico, .drow-ico.rose, .drow-ico.amber { background: var(--calm-bg); color: #2f5d66; }
+.bodyfig-shape { fill: #e1e7ea; }
+.bodyfig-halo { fill: rgba(29, 79, 88, .2); }
+.bodyfig-dot { fill: var(--calm-4); }
+.bodybar i { background: var(--calm-3); }
+
+/* badges and status: no bright red or green */
+.side-badge { background: #fff; color: #0b525d; box-shadow: 0 0 0 2px #10636e; }
+.tab-badge { background: var(--high); }
+.switch input:checked + span { background: var(--tint); }
+.conn.on .conn-dot, .side .device.on .device-ico::after { background: #cfe9e4; }
+.conn.off .conn-dot, .side .device.off .device-ico::after { background: #f2c4bf; }
+.conn.lock .conn-dot, .side .device.lock .device-ico::after { background: #f1ddb0; }
+@keyframes flash { from { background: var(--calm-bg); } to { background: transparent; } }
