@@ -1,3 +1,6 @@
 .env
 vexo-open-kit/
 my-project/.device_key
+.sandbox_id
+__pycache__/
+data/
