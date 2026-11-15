@@ -889,21 +889,25 @@ function renderDash(sorted) {
     hv.append(el('p', 'dhero-empty', 'No upcoming visits'));
   }
 
-  // two quick numbers beside it
+  // at a glance: one row of numbers on the background, spread across the width
   const gl = $('dc-glance');
   gl.replaceChildren();
   const nd = nextDose(state.meds);
   const lat = sorted[0];
-  const tile = (hue, ic, label, valueEl, subText, href) => {
-    const a = el('a', 'dcard dmini'); a.href = href; a.dataset.hue = hue;
-    const t = el('span', 'glance-top'); const i = el('span', 'glance-ico'); i.append(icon(ic)); t.append(i, el('span', 'glance-label', label));
-    a.append(t, valueEl, el('span', 'glance-sub', subText));
-    return a;
+  const rated = state.events.filter((e) => present(e.severity));
+  const last14 = state.events.filter((e) => { const p = parseTs(e.ts); return p && dayDiff(p) < 14; });
+  const stripItem = (label, valueEl, subText, href) => {
+    const a = el('a', 'strip-item'); a.href = href;
+    a.append(el('span', 'strip-l', label), valueEl, el('span', 'strip-s', subText || ''));
+    gl.append(a);
   };
-  gl.append(nd ? tile('amber', 'med', 'Next Dose', el('span', 'glance-value', hhmm(nd.t)), nd.med.name || '', '#medications')
-    : tile('amber', 'med', 'Medications', el('span', 'glance-value', `${state.meds.length}`), 'None due today', '#medications'));
-  if (lat) { const v = sevEl(lat.severity); v.className += ' glance-value'; gl.append(tile('rose', 'symptom', 'Latest Symptom', v, symptomTitle(lat), '#symptoms')); }
-  else gl.append(tile('rose', 'symptom', 'Latest Symptom', el('span', 'glance-value', '—'), 'None logged', '#log'));
+  const val = (t) => el('span', 'strip-v', t);
+  stripItem('Next dose', val(nd ? hhmm(nd.t) : '—'), nd ? nd.med.name || '' : 'None due today', '#medications');
+  if (lat) { const v = sevEl(lat.severity); v.className += ' strip-v'; stripItem('Latest symptom', v, symptomTitle(lat), '#symptoms'); }
+  else stripItem('Latest symptom', val('—'), 'None logged', '#log');
+  stripItem('Symptoms', val(`${last14.length}`), 'Last 14 days', '#symptoms');
+  stripItem('Average', val(rated.length ? `${(rated.reduce((n, e) => n + Number(e.severity), 0) / rated.length).toFixed(1)}/10` : '—'), 'Severity', '#symptoms');
+  stripItem('Highest', val(rated.length ? `${Math.max(...rated.map((e) => Number(e.severity)))}/10` : '—'), 'Severity', '#symptoms');
 
   // To Do's
   const todo = $('dc-todo');
@@ -963,21 +967,8 @@ function renderDash(sorted) {
     bc.append(wrap);
   } else bc.append(dEmpty('No symptoms logged', ''));
 
-  // Track My Health: severity over 14 days, wide
-  const tr = $('dc-trend');
-  const rated = state.events.filter((e) => present(e.severity));
-  const avg = rated.length ? (rated.reduce((n, e) => n + Number(e.severity), 0) / rated.length).toFixed(1) : null;
-  const head = dcardHead('Track My Health', 'Last 14 days', '#symptoms');
-  tr.replaceChildren(head);
-  const sub = el('div', 'dstats');
-  const stat = (label, value) => { const d = el('div', 'dstat'); d.append(el('span', 'dstat-v', value), el('span', 'dstat-l', label)); sub.append(d); };
-  const last14 = state.events.filter((e) => { const p = parseTs(e.ts); return p && dayDiff(p) < 14; });
-  stat('Symptoms', `${last14.length}`);
-  stat('Average', avg ? `${avg}/10` : '—');
-  stat('Highest', rated.length ? `${Math.max(...rated.map((e) => Number(e.severity)))}/10` : '—');
-  const days = new Set(last14.map((e) => { const p = parseTs(e.ts); return `${p.y}-${p.mo}-${p.d}`; }));
-  stat('Days', `${days.size}`);
-  tr.append(sub, severityChart());
+  // Track My Health: severity over 14 days, bars or line
+  renderTrend();
 
   // Medications
   const md = $('dc-meds');
@@ -987,7 +978,7 @@ function renderDash(sorted) {
     const nd = nextDose(state.meds);
     state.meds.forEach((m) => {
       const a = el('a', 'drow'); a.href = '#medications';
-      const i = el('span', 'drow-ico amber'); i.append(icon('med'));
+      const i = el('span', 'drow-ico'); i.append(icon('med'));
       const mm = el('span', 'row-main');
       mm.append(el('span', 'row-title', m.name || 'Medication'), el('span', 'row-sub', m.dose || ''));
       const end = el('span', 'drow-end');
@@ -999,46 +990,84 @@ function renderDash(sorted) {
   } else md.append(dEmpty('No medications on file', ''));
 }
 
-// bar chart: highest severity each day for 14 days (empty bar = nothing rated)
-function severityChart() {
-  const wrap = el('div', 'chart');
-  const days = [];
-  const now = new Date();
-  for (let i = 13; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i); days.push(d); }
-  const W = 640, H = 120, pad = 22, bw = (W - pad) / 14;
-  const NS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', `0 0 ${W} ${H + 22}`);
-  svg.setAttribute('class', 'chart-svg');
-  svg.setAttribute('role', 'img');
-  const mk = (tag, attrs) => { const n = document.createElementNS(NS, tag); Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v)); return n; };
-  [0, 5, 10].forEach((v) => {
-    const y = H - (v / 10) * (H - 10);
-    svg.append(mk('line', { x1: pad, x2: W, y1: y, y2: y, class: 'grid' }));
-    const t = mk('text', { x: 0, y: y + 4, class: 'axis' }); t.textContent = v; svg.append(t);
+let chartKind = 'bar';
+try { if (localStorage.getItem('vexo-chart') === 'line') chartKind = 'line'; } catch (e) { /* storage off */ }
+function renderTrend() {
+  const tr = $('dc-trend');
+  const head = el('header', 'dcard-head');
+  const ht = el('div', 'dcard-title');
+  ht.append(el('h2', null, 'Track My Health'), el('span', 'dcard-sub', 'Highest severity each day · last 14 days'));
+  const seg = el('div', 'segmented seg-sm'); seg.setAttribute('role', 'tablist'); seg.setAttribute('aria-label', 'Chart type');
+  [['bar', 'Bars'], ['line', 'Line']].forEach(([k, t]) => {
+    const b = el('button', null, t); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(chartKind === k));
+    b.onclick = () => { chartKind = k; try { localStorage.setItem('vexo-chart', k); } catch (e) { /* storage off */ } renderTrend(); };
+    seg.append(b);
   });
-  let rated = 0;
-  days.forEach((d, i) => {
+  head.append(ht, seg);
+  tr.replaceChildren(head, severityChart(chartKind));
+}
+
+// highest severity each day for 14 days, as bars or as a line with a trend
+function severityChart(kind) {
+  const wrap = el('div', 'chart');
+  const now = new Date();
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
     const evs = state.events.filter((e) => { const p = parseTs(e.ts); return p && p.y === d.getFullYear() && p.mo === d.getMonth() + 1 && p.d === d.getDate(); });
     const sev = evs.map((e) => Number(e.severity)).filter((n) => present(n) && !Number.isNaN(n));
-    const x = pad + i * bw + bw * 0.22, w = bw * 0.56;
-    if (sev.length) {
-      rated++;
-      const v = Math.max(...sev);
-      const hgt = Math.max(4, (v / 10) * (H - 10));
-      const r = mk('rect', { x, y: H - hgt, width: w, height: hgt, rx: 4, class: 'bar ' + (v >= 7 ? 'high' : v >= 4 ? 'mid' : 'low') });
-      const tt = mk('title', {}); tt.textContent = `${MON[d.getMonth()]} ${d.getDate()}: ${v}/10 (${evs.length} report${evs.length > 1 ? 's' : ''})`; r.append(tt);
-      svg.append(r);
-    } else if (evs.length) {
-      svg.append(mk('rect', { x, y: H - 4, width: w, height: 4, rx: 2, class: 'bar none' }));
-    }
-    if (i % 2 === 1 || i === 13) { const t = mk('text', { x: x + w / 2, y: H + 16, class: 'axis mid-anchor' }); t.textContent = i === 13 ? 'Today' : `${d.getDate()}`; svg.append(t); }
+    days.push({ d, n: evs.length, v: sev.length ? Math.max(...sev) : null });
+  }
+  const W = 640, H = 170, top = 12, pad = 24, bw = (W - pad) / 14;
+  const y = (v) => H - (v / 10) * (H - top);
+  const cx = (i) => pad + i * bw + bw / 2;
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => { const n = document.createElementNS(NS, tag); Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v)); return n; };
+  const tip = (node, x) => { const t = mk('title', {}); t.textContent = `${MON[x.d.getMonth()]} ${x.d.getDate()}: ${x.v}/10 (${x.n} report${x.n > 1 ? 's' : ''})`; node.append(t); return node; };
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H + 22}`, class: 'chart-svg', role: 'img' });
+  [0, 5, 10].forEach((v) => {
+    svg.append(mk('line', { x1: pad, x2: W, y1: y(v), y2: y(v), class: 'grid' }));
+    const t = mk('text', { x: 0, y: y(v) + 4, class: 'axis' }); t.textContent = v; svg.append(t);
   });
-  svg.setAttribute('aria-label', `Highest severity per day over 14 days; ${rated} days with a rating`);
-  wrap.append(svg);
+  days.forEach((x, i) => {
+    if (i % 2 === 1 || i === 13) { const t = mk('text', { x: cx(i), y: H + 16, class: 'axis mid-anchor' }); t.textContent = i === 13 ? 'Today' : `${x.d.getDate()}`; svg.append(t); }
+  });
+  const pts = days.map((x, i) => ({ ...x, i })).filter((x) => x.v !== null);
   const legend = el('div', 'legend');
-  [['low', '0–3'], ['mid', '4–6'], ['high', '7–10'], ['none', 'Not rated']].forEach(([c, t]) => { const s = el('span', 'lg'); s.append(el('i', 'sw ' + c), document.createTextNode(t)); legend.append(s); });
-  wrap.append(legend);
+  if (kind === 'line') {
+    if (pts.length) {
+      const grad = mk('linearGradient', { id: 'trend-fill', x1: 0, y1: 0, x2: 0, y2: 1 });
+      grad.append(mk('stop', { offset: '0%', class: 'area-top' }), mk('stop', { offset: '100%', class: 'area-bot' }));
+      const defs = mk('defs', {}); defs.append(grad); svg.append(defs);
+      const line = pts.map((p, k) => `${k ? 'L' : 'M'}${cx(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+      if (pts.length > 1) svg.append(mk('path', { d: `${line} L${cx(pts[pts.length - 1].i).toFixed(1)},${H} L${cx(pts[0].i).toFixed(1)},${H} Z`, class: 'area', fill: 'url(#trend-fill)' }));
+      // straight-line trend through the rated days (least squares), drawn dashed
+      if (pts.length > 2) {
+        const n = pts.length, sx = pts.reduce((a, p) => a + p.i, 0), sy = pts.reduce((a, p) => a + p.v, 0);
+        const sxx = pts.reduce((a, p) => a + p.i * p.i, 0), sxy = pts.reduce((a, p) => a + p.i * p.v, 0);
+        const m = (n * sxy - sx * sy) / (n * sxx - sx * sx || 1), c = (sy - m * sx) / n;
+        const clamp = (v) => Math.min(10, Math.max(0, v));
+        const i0 = pts[0].i, i1 = pts[n - 1].i;
+        svg.append(mk('line', { x1: cx(i0), y1: y(clamp(m * i0 + c)), x2: cx(i1), y2: y(clamp(m * i1 + c)), class: 'trendline' }));
+      }
+      svg.append(mk('path', { d: line, class: 'line' }));
+      pts.forEach((p, k) => svg.append(tip(mk('circle', { cx: cx(p.i), cy: y(p.v), r: k === pts.length - 1 ? 5 : 3.5, class: 'pt' + (k === pts.length - 1 ? ' last' : '') }), p)));
+      const lastP = pts[pts.length - 1];
+      const lab = mk('text', { x: cx(lastP.i), y: y(lastP.v) - 10, class: 'pt-label mid-anchor' }); lab.textContent = `${lastP.v}/10`; svg.append(lab);
+    }
+    [['ln', 'Highest each day'], ['tl', 'Trend']].forEach(([c, t]) => { const s = el('span', 'lg'); s.append(el('i', 'sw-line ' + c), document.createTextNode(t)); legend.append(s); });
+  } else {
+    days.forEach((x, i) => {
+      const w = bw * 0.56, bx = cx(i) - w / 2;
+      if (x.v !== null) {
+        const hgt = Math.max(4, (x.v / 10) * (H - top));
+        svg.append(tip(mk('rect', { x: bx, y: H - hgt, width: w, height: hgt, rx: 4, class: 'bar ' + (x.v >= 7 ? 'high' : x.v >= 4 ? 'mid' : 'low') }), x));
+      } else if (x.n) svg.append(mk('rect', { x: bx, y: H - 4, width: w, height: 4, rx: 2, class: 'bar none' }));
+    });
+    [['low', '0–3'], ['mid', '4–6'], ['high', '7–10'], ['none', 'Not rated']].forEach(([c, t]) => { const s = el('span', 'lg'); s.append(el('i', 'sw ' + c), document.createTextNode(t)); legend.append(s); });
+  }
+  svg.setAttribute('aria-label', `${kind === 'line' ? 'Line' : 'Bar'} chart of highest severity per day over 14 days; ${pts.length} days with a rating`);
+  wrap.append(svg, legend);
   return wrap;
 }
 
