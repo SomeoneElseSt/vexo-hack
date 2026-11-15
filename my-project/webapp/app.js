@@ -1324,6 +1324,11 @@ function renderRail() {
   ct.replaceChildren(el('h2', null, 'Care Team'));
   const team = {};
   state.visits.forEach((v) => { if (present(v.clinician)) team[v.clinician] = team[v.clinician] || v; });
+  // people the patient chose to share with are part of the care team too
+  (state.msgs || []).forEach((m) => {
+    const member = m.care_member;
+    if (member && present(member.name)) team[member.name] = team[member.name] || { clinician: member.name, specialty: cap(member.relation || "family") };
+  });
   const people = Object.values(team);
   if (!people.length) { ct.append(el('p', 'cal-none', 'Clinicians from your visits appear here.')); return; }
   const list = el('div', 'team');
