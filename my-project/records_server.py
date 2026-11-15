@@ -20,6 +20,7 @@ import csv
 import io
 import json
 import sqlite3
+import gzip
 import os
 import threading
 import time
@@ -267,13 +268,23 @@ load();setInterval(load,5000)</script></body></html>"""
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, code: int, body: bytes, ctype: str) -> None:
-        if self.path.split("?")[0] not in ("/", "/index.html"):
-            log_api(self.command, self.path.split("?")[0], code)
+    def _send(self, code: int, body: bytes, ctype: str,
+              cache: str = "no-store") -> None:
+        path = self.path.split("?")[0]
+        if path not in ("/", "/index.html"):
+            log_api(self.command, path, code)
+        accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "")
+        compressible = ctype.startswith(("text/", "application/json",
+                                        "application/javascript", "image/svg"))
+        if accepts_gzip and compressible and len(body) > 512:
+            body = gzip.compress(body, 6)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", cache)
+        if accepts_gzip and compressible:
+            self.send_header("Content-Encoding", "gzip")
         self.end_headers()
         self.wfile.write(body)
 
@@ -358,7 +369,7 @@ class Handler(BaseHTTPRequestHandler):
                  "html": "text/html; charset=utf-8", "svg": "image/svg+xml",
                  "png": "image/png"}.get(target.suffix.lstrip("."),
                                          "application/octet-stream")
-        self._send(200, target.read_bytes(), ctype)
+        self._send(200, target.read_bytes(), ctype, cache="public, max-age=60")
 
     def do_POST(self) -> None:
         path = self.path.split("?")[0]
