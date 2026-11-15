@@ -276,14 +276,16 @@ class Handler(BaseHTTPRequestHandler):
         accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "")
         compressible = ctype.startswith(("text/", "application/json",
                                         "application/javascript", "image/svg"))
-        if accepts_gzip and compressible and len(body) > 512:
+        # only claim gzip when the body really is gzipped: a wrong header breaks clients
+        zipped = accepts_gzip and compressible and len(body) > 512
+        if zipped:
             body = gzip.compress(body, 6)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Cache-Control", cache)
-        if accepts_gzip and compressible:
+        if zipped:
             self.send_header("Content-Encoding", "gzip")
         self.end_headers()
         self.wfile.write(body)
