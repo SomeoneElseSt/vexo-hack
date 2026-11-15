@@ -430,10 +430,13 @@ def process_text(quote: str, utterance: bytes) -> None:
 # webapp before it counts as the patient's After Visit Summary.
 
 VISIT_START = ("i'm with the doctor", "i am with the doctor", "i'm with my doctor",
-               "i am with my doctor", "i'm at the doctor", "start the visit",
-               "start recording the visit")
+               "i am with my doctor", "i'm at the doctor", "i am at the doctor",
+               "start the visit", "start recording the visit", "start a visit")
+# whisper mishears the commands: "end the visit" comes back as "and the visit",
+# "finish" as "finishes" — the variants are what it actually outputs
 VISIT_END = ("meeting is done", "meeting is over", "visit is done", "visit is over",
              "appointment is done", "appointment is over", "end the visit",
+             "and the visit", "in the visit", "ending the visit", "finish the visit",
              "stop recording the visit")
 VISIT = {"active": False, "id": None, "start": None, "turns": []}
 VISIT_LOCK = threading.Lock()
