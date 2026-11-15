@@ -20,6 +20,7 @@ import csv
 import io
 import json
 import sqlite3
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -49,6 +50,21 @@ CREATE TABLE IF NOT EXISTS sealed_record (
   PRIMARY KEY (kind, id)
 );
 """
+API_LOG = os.environ.get("API_LOG", "/tmp/api.jsonl")
+
+
+def log_api(method: str, path: str, status: int, note: str = "") -> None:
+    line = {"t": time.strftime("%H:%M:%S"), "type": "api", "who": "server",
+            "method": method, "path": path, "status": status}
+    if note:
+        line["note"] = note
+    try:
+        with open(API_LOG, "a") as fh:
+            fh.write(json.dumps(line) + "\n")
+    except OSError:
+        pass
+
+
 KINDS = ("Observation", "Encounter", "Communication", "MedicationRequest",
          "MedicationAdministration")
 
@@ -252,6 +268,8 @@ load();setInterval(load,5000)</script></body></html>"""
 
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str) -> None:
+        if self.path.split("?")[0] not in ("/", "/index.html"):
+            log_api(self.command, self.path.split("?")[0], code)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))

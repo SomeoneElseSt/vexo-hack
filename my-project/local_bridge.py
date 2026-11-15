@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import sys
 import threading
 import time
@@ -150,6 +151,19 @@ def extract(quote: str) -> tuple[dict, str | None]:
     return {}, None
 
 
+STREAM_LOG = os.environ.get("STREAM_LOG", "/tmp/stream.jsonl")
+
+
+def log_stream(entry_type: str, **fields) -> None:
+    """Append one literal line to the demo stream: transcripts, labels, API calls."""
+    line = json.dumps({"t": time.strftime("%H:%M:%S"), "type": entry_type, **fields})
+    try:
+        with open(STREAM_LOG, "a") as fh:
+            fh.write(line + "\n")
+    except OSError as exc:
+        print(f"stream log failed: {exc}", flush=True)
+
+
 MED_WORDS = ("medicine", "medication", "med", "pill", "tablet", "dose")
 ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
             "1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "5th": 5}
@@ -164,8 +178,12 @@ def push_sealed(event: dict, kind: str = "Observation") -> None:
     try:
         r = requests.post(url, data=body, timeout=20, headers={
             "Content-Type": "application/json", "X-Device-Auth": dc.auth_token(SECRET)})
+        log_stream("api", method="POST", path=f"/{kind}", status=r.status_code,
+                   id=event["id"], bytes=len(body))
         print(f"pushed {kind} {event['id']} -> {r.status_code}", flush=True)
     except Exception as exc:
+        log_stream("api_error", method="POST", path=f"/{kind}",
+                   error=f"{type(exc).__name__}: {exc}")
         print(f"push failed: {type(exc).__name__}: {exc}", flush=True)
 
 
@@ -174,6 +192,7 @@ def fetch_medicines() -> list[dict]:
     url = f"{OPTIONS.records}/MedicationRequest"
     try:
         r = requests.get(url, timeout=20, headers={"X-Device-Auth": dc.auth_token(SECRET)})
+        log_stream("api", method="GET", path="/MedicationRequest", status=r.status_code)
         r.raise_for_status()
         return [m for m in r.json() if isinstance(m, dict) and m.get("id")]
     except Exception as exc:
@@ -195,6 +214,24 @@ def parse_taken(quote: str) -> int | None:
         if token.isdigit():
             return int(token)
     return 1   # no number given: assume the single/first medicine
+
+
+def post_message(quote: str, action: str | None = None) -> None:
+    """A note or question for the doctor, sealed like any other record."""
+    msg = {
+        "schema_version": "0.1",
+        "id": f"msg-{int(time.time() * 1000)}",
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "thread": "general",
+        "from": "patient",
+        "to": "clinician",
+        "sender": "You",
+        "body": quote,
+        "priority": None,
+        "action": action,
+        "related_event_ids": [],
+    }
+    push_sealed(msg, "Communication")
 
 
 def log_taken(quote: str) -> bool:
@@ -230,12 +267,17 @@ SAMPLES_PER_CHUNK = 320   # 20 ms at 16 kHz mono
 
 DECISION_MODEL = "gemma3:4b"        # the small local gate
 DECISION_URL = "http://localhost:11434/v1"
-DECISION_PROMPT = """You decide whether a patient's spoken sentence contains a
-health report worth logging in their medical record.
-Return ONLY JSON: {"log": true|false, "kind": "symptom"|"dose"|"other", "reason": "short"}
+DECISION_PROMPT = """You decide whether a patient's spoken sentence contains
+something worth logging in their medical record, and which kind it is.
+Return ONLY JSON: {"log": true|false,
+                   "kind": "symptom"|"dose"|"message"|"visit"|"other",
+                   "reason": "short"}
 Rules:
-- log true only for a symptom the patient feels, or a medicine they took.
-- Small talk, thanks, counting, background chatter: log false.
+- symptom: something they feel (pain, pressure, dizzy, nausea, tightness...).
+- dose: a medicine they took ("I took medicine 1").
+- message: they are telling or asking the doctor something ("tell my doctor...").
+- visit: about an appointment ("I have an appointment tomorrow").
+- other: small talk, thanks, counting, background chatter -> log false.
 - Never diagnose, never add details that were not said.
 """
 
@@ -279,6 +321,7 @@ def decide(quote: str) -> dict:
     keyword gate decides, so a real report is never lost.
     """
     if len(quote.split()) < MIN_WORDS:
+        log_stream("gate", text=quote, log=False, kind="other", reason="too short")
         return {"log": False, "kind": "other", "reason": "too short"}
     payload = {
         "model": DECISION_MODEL,
@@ -297,12 +340,20 @@ def decide(quote: str) -> dict:
             answer = json.loads(content)
             if "log" not in answer:
                 raise ValueError("no 'log' field")
-            return {"log": bool(answer.get("log")), "kind": answer.get("kind") or "other",
-                    "reason": answer.get("reason") or ""}
+            kind = answer.get("kind") or "other"
+            if kind not in ("symptom", "dose", "message", "visit", "other"):
+                kind = "other"
+            verdict = {"log": bool(answer.get("log")), "kind": kind,
+                       "reason": answer.get("reason") or ""}
+            log_stream("gate", text=quote, **verdict)
+            return verdict
         except (json.JSONDecodeError, ValueError, requests.RequestException, KeyError) as exc:
+            log_stream("gate_error", attempt=attempt, error=f"{type(exc).__name__}: {exc}")
             print(f"gate attempt {attempt}/{GATE_RETRIES} failed: "
                   f"{type(exc).__name__}: {exc}", flush=True)
-    return _keyword_verdict(quote)
+    verdict = _keyword_verdict(quote)
+    log_stream("gate", text=quote, fallback=True, **verdict)
+    return verdict
 
 
 async def band_loop() -> None:
@@ -348,6 +399,8 @@ async def band_loop() -> None:
 
     async def process(utterance: bytes) -> None:
         quote = await asyncio.to_thread(transcribe, utterance)
+        log_stream("transcript", text=quote or "",
+                   audio_s=round(len(utterance) / 2 / 16000, 2), rms=rms(utterance))
         if not quote:
             return
         verdict = await asyncio.to_thread(decide, quote)
@@ -356,8 +409,15 @@ async def band_loop() -> None:
         if not verdict["log"]:
             return
         if verdict["kind"] == "dose" or parse_taken(quote) is not None:
+            log_stream("route", text=quote, intent="dose", path="/MedicationAdministration")
             await asyncio.to_thread(log_taken, quote)
             return
+        if verdict["kind"] in ("message", "visit"):
+            action = "Book a visit" if verdict["kind"] == "visit" else None
+            log_stream("route", text=quote, intent=verdict["kind"], path="/Communication")
+            await asyncio.to_thread(post_message, quote, action)
+            return
+        log_stream("route", text=quote, intent="symptom", path="/Observation")
         fields, used_model = await asyncio.to_thread(extract, quote)
         event = {
             "schema_version": "0.1",
