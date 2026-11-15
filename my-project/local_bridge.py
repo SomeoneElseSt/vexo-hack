@@ -423,6 +423,159 @@ def process_text(quote: str, utterance: bytes) -> None:
     push_sealed(event)
 
 
+# ---------- visit mode: "I'm with the doctor" ... "the meeting is done" ----------
+# Between the two phrases every transcribed turn goes into one visit transcript
+# instead of the symptom gate. At the end the transcript becomes a draft visit
+# note (sealed Encounter, status "draft"); the clinician approves it in the
+# webapp before it counts as the patient's After Visit Summary.
+
+VISIT_START = ("i'm with the doctor", "i am with the doctor", "i'm with my doctor",
+               "i am with my doctor", "i'm at the doctor", "start the visit",
+               "start recording the visit")
+VISIT_END = ("meeting is done", "meeting is over", "visit is done", "visit is over",
+             "appointment is done", "appointment is over", "end the visit",
+             "stop recording the visit")
+VISIT = {"active": False, "id": None, "start": None, "turns": []}
+VISIT_LOCK = threading.Lock()
+
+VISIT_NOTE_PROMPT = """You write a DRAFT clinic visit note from the transcript of a
+conversation between a patient and a clinician. The clinician reviews and edits
+it before anything is saved.
+Return ONLY JSON with these keys:
+  clinician: string or null        (name only if said, e.g. "Dr. Rivera")
+  specialty: string or null
+  chief_complaint: string or null  (main reason for the visit, a few words)
+  subjective: string or null       (history of present illness: what the patient reported)
+  objective: string or null        (exam findings, vitals, results the clinician stated)
+  assessment: string or null       (the clinician's impression, in their words)
+  plan: string or null             (tests, treatment, referrals the clinician decided)
+  medications: list of {"name": string, "dose": string or null,
+                        "frequency": string or null, "times": list of "HH:MM"}
+                                   (times only if a clock time was said, else [])
+  tests_ordered: list of strings
+  follow_up: string or null        (when to come back, as said)
+  instructions: list of strings    (what the patient should do, short, plain words)
+  patient_summary: string or null  (2-4 plain sentences for the patient)
+Use only what was said. Never add a diagnosis, medicine, dose or test that was
+not said. If something was not said, use null or [].
+"""
+
+
+def _plain(text: str) -> str:
+    low = text.lower().replace("’", "'")
+    return " ".join(re.sub(r"[^a-z' ]", " ", low).split())
+
+
+def visit_note(transcript: str) -> tuple[dict, str | None]:
+    """The transcript as a draft note, primary model first, then the fallback."""
+    attempts = [(OPTIONS.ollama, OPTIONS.gemma)]
+    if OPTIONS.ollama_fallback and OPTIONS.gemma_fallback:
+        attempts.append((OPTIONS.ollama_fallback, OPTIONS.gemma_fallback))
+    for endpoint, model in attempts:
+        started = time.time()
+        try:
+            r = requests.post(f"{endpoint}/chat/completions", timeout=600, json={
+                "model": model, "temperature": 0, "stream": False, "format": "json",
+                "response_format": {"type": "json_object"},
+                "messages": [{"role": "system", "content": VISIT_NOTE_PROMPT},
+                             {"role": "user", "content": transcript}]})
+            r.raise_for_status()
+            note = parse_json_reply(r.json()["choices"][0]["message"]["content"])
+            log_stream("model", role="visit_note", model=model, endpoint=endpoint,
+                       seconds=round(time.time() - started, 2), ok=True)
+            return note, model
+        except Exception as exc:
+            log_stream("model", role="visit_note", model=model, ok=False,
+                       error=f"{type(exc).__name__}: {exc}")
+            print(f"visit note failed on {model}: {type(exc).__name__}: {exc}", flush=True)
+    return {}, None
+
+
+def _texts(value) -> list[str]:
+    return [str(x).strip() for x in (value or []) if str(x).strip()] if isinstance(value, list) else []
+
+
+def draft_encounter(visit: dict, transcript: str, note: dict, model: str | None) -> dict:
+    """The record the clinician reviews. Nothing here is final until approved."""
+    meds = []
+    for m in note.get("medications") or []:
+        if isinstance(m, dict) and str(m.get("name") or "").strip():
+            meds.append({"name": str(m["name"]).strip(), "dose": m.get("dose"),
+                         "frequency": m.get("frequency"),
+                         "times": [t for t in _texts(m.get("times")) if re.fullmatch(r"\d{1,2}:\d{2}", t)]})
+    return {
+        "schema_version": "0.1",
+        "id": visit["id"],
+        "ts": visit["start"],
+        "start": visit["start"],
+        "end": iso_now(),
+        "status": "draft",
+        "kind": "in person",
+        "clinician": note.get("clinician"),
+        "specialty": note.get("specialty"),
+        "reason": note.get("chief_complaint"),
+        "note": {k: note.get(k) for k in ("subjective", "objective", "assessment", "plan")},
+        "summary": note.get("patient_summary"),
+        "instructions": _texts(note.get("instructions")),
+        "tests_ordered": _texts(note.get("tests_ordered")),
+        "follow_up_text": note.get("follow_up"),
+        "follow_up": None,
+        "medications": meds,
+        "medication_ids": [],
+        "related_event_ids": [],
+        "transcript": transcript,
+        "transcript_model": "faster-whisper-small",
+        "note_model": model,
+        "source": "visit recording · local models",
+    }
+
+
+def start_visit(text: str) -> None:
+    with VISIT_LOCK:
+        VISIT.update(active=True, id=f"enc-{int(time.time() * 1000)}", start=iso_now(),
+                     turns=[text])
+        visit = dict(VISIT)
+    log_stream("visit", state="started", id=visit["id"], text=text)
+    print(f"visit started {visit['id']}", flush=True)
+    # the doctor's screen shows "recording" until the note is ready
+    push_sealed({"schema_version": "0.1", "id": visit["id"], "ts": visit["start"],
+                 "start": visit["start"], "status": "recording", "kind": "in person",
+                 "source": "visit recording · local models"}, "Encounter")
+
+
+def finish_visit(visit: dict) -> None:
+    transcript = "\n".join(visit["turns"]).strip()
+    log_stream("visit", state="ended", id=visit["id"], turns=len(visit["turns"]),
+               words=len(transcript.split()))
+    note, model = visit_note(transcript) if transcript else ({}, None)
+    # even without a model the transcript is kept, so the clinician can write the note
+    push_sealed(draft_encounter(visit, transcript, note, model), "Encounter")
+    print(f"visit {visit['id']} drafted for review ({model or 'no model'})", flush=True)
+
+
+def route_turn(text: str, audio: bytes, pending: list) -> None:
+    """A finished turn: part of a visit, a visit command, or a normal report."""
+    low = _plain(text)
+    with VISIT_LOCK:
+        active = VISIT["active"]
+        if active:
+            VISIT["turns"].append(text)
+            ended = any(p in low for p in VISIT_END)
+            if ended:
+                done = {**VISIT, "turns": list(VISIT["turns"])}
+                VISIT.update(active=False, id=None, start=None, turns=[])
+    if active:
+        log_stream("visit", state="turn", text=text)
+        if ended:
+            threading.Thread(target=finish_visit, args=(done,), daemon=True).start()
+        return
+    if any(p in low for p in VISIT_START):
+        start_visit(text)
+        return
+    pending.append((time.time(), text, audio))
+    log_stream("queued", text=text, window_in=GATE_WINDOW_SECONDS)
+
+
 def common_prefix_words(a: str, b: str) -> str:
     """The words both hypotheses agree on, in order — LocalAgreement-2.
 
@@ -516,8 +669,7 @@ async def _stream_turns(read_buffer, consume, voice_idle_seconds, buffer_bytes,
             continue
         log_stream("transcript", text=final_text, audio_s=round(seconds, 2),
                    rms=rms(snapshot))
-        pending.append((time.time(), final_text, snapshot))
-        log_stream("queued", text=final_text, window_in=GATE_WINDOW_SECONDS)
+        route_turn(final_text, snapshot, pending)
         if on_done:
             await on_done()
 
