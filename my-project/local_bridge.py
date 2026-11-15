@@ -167,6 +167,12 @@ def extract(quote: str) -> tuple[dict, str | None]:
 STREAM_LOG = os.environ.get("STREAM_LOG", "/tmp/stream.jsonl")
 
 
+def iso_now() -> str:
+    """Local time with offset, ISO 8601: 2026-11-14T16:14:17-08:00 (never UTC Z)."""
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    return stamp[:-2] + ":" + stamp[-2:] if len(stamp) > 2 else stamp
+
+
 def log_stream(entry_type: str, **fields) -> None:
     """Append one literal line to the demo stream.
 
@@ -197,7 +203,7 @@ def push_sealed(event: dict, kind: str = "Observation") -> None:
         r = requests.post(url, data=body, timeout=20, headers={
             "Content-Type": "application/json", "X-Device-Auth": dc.auth_token(SECRET)})
         log_stream("api", method="POST", path=f"/{kind}", status=r.status_code,
-                   id=event["id"], bytes=len(body))
+                   id=event["id"], bytes=len(body), payload=event)
         print(f"pushed {kind} {event['id']} -> {r.status_code}", flush=True)
     except Exception as exc:
         log_stream("api_error", method="POST", path=f"/{kind}",
@@ -239,7 +245,7 @@ def post_message(quote: str, action: str | None = None) -> None:
     msg = {
         "schema_version": "0.1",
         "id": f"msg-{int(time.time() * 1000)}",
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "ts": iso_now(),
         "thread": "general",
         "from": "patient",
         "to": "clinician",
@@ -262,7 +268,7 @@ def log_taken(quote: str) -> bool:
     taken = {
         "schema_version": "0.1",
         "id": f"adm-{int(time.time() * 1000)}",
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "ts": iso_now(),
         "taken_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "medication_id": chosen.get("id") if chosen else None,
         "medication_name": chosen.get("name") if chosen else f"medicine {index}",
@@ -499,7 +505,7 @@ async def band_loop() -> None:
         event = {
             "schema_version": "0.1",
             "id": f"evt-{int(time.time() * 1000)}",
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "ts": iso_now(),
             "source": "band",
             "audio_seconds": round(len(utterance) / 2 / 16000, 2),
             "verbatim_quote": quote,

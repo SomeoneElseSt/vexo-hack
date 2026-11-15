@@ -108,9 +108,18 @@ def line_api(entry: dict) -> str:
     note = f" {entry['id']}" if entry.get("id") else ""
     size = f"  ({entry['bytes']} B)" if entry.get("bytes") else ""
     who = entry.get("who") or "bridge"
-    return (pad(paint("→ api", MAGENTA), 22)
+    head = (pad(paint("→ api", MAGENTA), 22)
             + f"{entry.get('method', 'GET')} {entry.get('path')} "
             + paint(f"{status}", colour) + f"{note}{size}  ({who})")
+    payload = entry.get("payload")
+    if not payload:
+        return head
+    # what was actually sent: the fields a reader cares about, not the raw blob
+    keep = ("ts", "source", "verbatim_quote", "body_location", "quality",
+            "severity", "activity", "extract_model")
+    shown = {k: payload[k] for k in keep if payload.get(k) is not None}
+    body = json.dumps(shown, ensure_ascii=False)
+    return head + "\n" + " " * 25 + paint(body, DIM)
 
 
 def line_model(entry: dict) -> str:
