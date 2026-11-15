@@ -302,11 +302,17 @@ Return ONLY JSON: {"log": true|false,
                    "kind": "symptom"|"dose"|"message"|"visit"|"other",
                    "reason": "short"}
 Rules:
-- symptom: something they feel (pain, pressure, dizzy, nausea, tightness...).
+- symptom: they describe something in their body that they feel (pain, pressure,
+  dizzy, nausea, tightness, cough, fever, itchy...).
 - dose: a medicine they took ("I took medicine 1").
-- message: they are telling or asking the doctor something ("tell my doctor...").
+- message: they address their doctor or care team directly with a health
+  request ("tell my doctor the rash is back", "can the nurse call me?").
 - visit: about an appointment ("I have an appointment tomorrow").
-- other: small talk, thanks, counting, background chatter -> log false.
+- other: EVERYTHING else -> log false. Conversation, business, startups,
+  funding, pitches, product or UI talk, technical discussion, counts, thanks.
+  Third-party talk and non-medical topics are never a report, even if they
+  mention doctors, patients, health, or hospitals in passing.
+- When unsure, log false: a missed report is better than a fake record.
 - Never diagnose, never add details that were not said.
 """
 
