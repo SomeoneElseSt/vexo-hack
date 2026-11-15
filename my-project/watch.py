@@ -1,152 +1,159 @@
-"""Watch the demo live: what the band hears, how it is labelled, and every API call.
+"""Live demo logger in the aie-hack style: one line per decision, then a roster.
 
-Usage (another terminal, while the bridge and records server run):
-    .venv/bin/python my-project/watch.py
-    .venv/bin/python my-project/watch.py --vm https://<vm-preview-host>?superserve_preview_token=...
+Every line is a single decision the system made, in the form
+    <what> -> <decision>  (<why>)
+and at the end a roster summary is written to my-project/data/roster.json:
 
-It tails the bridge log for heard/labelled lines and polls the records API for
-new records of every kind, printing one line per record as it lands.
+    {"history": [{"type": "gate", "kind": "symptom", "decision": "log",
+                  "pass_rate": 0.83, "by_intent": {...}, "avg_seconds": 0.79,
+                  "at": "..."}],
+     "totals": {"transcripts": 12, "logged": 4, "dropped": 8, "api_calls": 9}}
+
+Usage:
+    .venv/bin/python my-project/watch.py               # follow the live streams
+    .venv/bin/python my-project/watch.py --summary     # print the roster only
 """
 
 import argparse
 import json
-import sys
 import time
+from collections import Counter
 from pathlib import Path
 
-import requests
-
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-import device_crypto as dc  # noqa: E402
+ROSTER = HERE / "data" / "roster.json"
+STREAM_LOG = Path("/tmp/stream.jsonl")
+API_LOG = Path("/tmp/api.jsonl")
 
-KINDS = ["Observation", "Encounter", "MedicationRequest",
-         "MedicationAdministration", "Communication"]
-
-
-def auth() -> str:
-    return dc.auth_token(dc.load_or_create_secret())
+INTENTS = ("symptom", "dose", "message", "visit", "other")
+ROUTE = {"symptom": "/Observation", "dose": "/MedicationAdministration",
+         "message": "/Communication", "visit": "/Communication"}
 
 
-def snapshot(base: str, token: str) -> dict:
-    """{kind: [ids]} — what the records API holds right now."""
-    state = {}
-    for kind in KINDS:
-        try:
-            r = requests.get(f"{base}/{kind}", timeout=10,
-                             headers={"X-Device-Auth": token})
-            r.raise_for_status()
-            rows = r.json()
-            state[kind] = [row.get("id") for row in rows if isinstance(row, dict)]
-        except Exception:
-            state[kind] = []
-    return state
+def load_roster() -> dict:
+    if ROSTER.exists():
+        return json.loads(ROSTER.read_text())
+    return {"history": [], "totals": Counter()}
 
 
-def records_by_id(base: str, token: str, kind: str, wanted: list) -> list:
-    try:
-        r = requests.get(f"{base}/{kind}", timeout=10, headers={"X-Device-Auth": token})
-        r.raise_for_status()
-        rows = {row.get("id"): row for row in r.json() if isinstance(row, dict)}
-    except Exception:
-        return []
-    return [rows[i] for i in wanted if i in rows]
+def save_roster(roster: dict, totals: Counter) -> None:
+    ROSTER.parent.mkdir(parents=True, exist_ok=True)
+    data = {"history": roster["history"][-200:], "totals": dict(totals)}
+    ROSTER.write_text(json.dumps(data, indent=1))
 
 
-def describe(kind: str, rec: dict) -> str:
-    if kind == "Observation":
-        return (f"{rec.get('quality') or '?'} in {rec.get('body_location') or '?'} "
-                f"sev={rec.get('severity')} :: {(rec.get('verbatim_quote') or '')[:60]!r} "
-                f"[{rec.get('extract_model') or 'no model'}]")
-    if kind == "MedicationAdministration":
-        return (f"dose TAKEN {rec.get('medication_name') or '?'} "
-                f"({rec.get('dose_taken') or '?'}) method={rec.get('method')} "
-                f"at {rec.get('taken_at')} :: {(rec.get('verbatim_quote') or '')[:50]!r}")
-    if kind == "MedicationRequest":
-        return f"medicine {rec.get('name')} {rec.get('dose')} times={rec.get('times')}"
-    if kind == "Encounter":
-        return f"visit with {rec.get('clinician')} :: {(rec.get('summary') or '')[:60]!r}"
-    return json.dumps(rec)[:120]
+def line_gate(entry: dict) -> str:
+    kind = entry.get("kind") or "other"
+    decision = "log" if entry.get("log") else "drop"
+    target = ROUTE.get(kind, "nothing") if entry.get("log") else "nothing"
+    why = entry.get("reason") or ""
+    return (f"gate  {decision:<4} {kind:<8} -> {target:<26} "
+            f"{entry.get('text', '')[:44]!r} ({why[:50]})")
 
 
-def tail_bridge(log_path: Path, seen_lines: int) -> int:
-    """Print new 'heard ...' / 'gate ...' lines; return the new line count."""
-    if not log_path.exists():
-        return seen_lines
-    lines = log_path.read_text(errors="replace").splitlines()
-    for line in lines[seen_lines:]:
-        if line.startswith(("heard ", "gate ", "pushed ", "dose logged", "extract failed")):
-            print(f"  band  {line}", flush=True)
-    return len(lines)
+def line_transcript(entry: dict) -> str:
+    return (f"heard {entry.get('audio_s')}s rms={entry.get('rms')} -> "
+            f"{(entry.get('text') or '')[:70]!r}")
+
+
+def line_route(entry: dict) -> str:
+    return (f"route {entry.get('intent'):<8} -> {entry.get('path'):<26} "
+            f"{entry.get('text', '')[:44]!r}")
+
+
+def line_api(entry: dict) -> str:
+    who = entry.get("who") or "bridge"
+    note = f" {entry['id']}" if entry.get("id") else ""
+    return (f"api   {entry.get('method', 'GET'):<4} {entry.get('path'):<26} "
+            f"{entry.get('status')}{note}  ({who})")
+
+
+RENDER = {"gate": line_gate, "transcript": line_transcript,
+          "route": line_route, "api": line_api}
+
+
+def read_entries(stream_log: Path, api_log: Path) -> list[dict]:
+    entries = []
+    for path in (stream_log, api_log):
+        if not path.exists():
+            continue
+        for raw in path.read_text(errors="replace").splitlines():
+            try:
+                entries.append(json.loads(raw))
+            except json.JSONDecodeError:
+                continue
+    return entries
+
+
+def summary(stream_log: Path, api_log: Path) -> None:
+    """The roster: how the decisions came out, per intent."""
+    entries = read_entries(stream_log, api_log)
+    gates = [e for e in entries if e.get("type") == "gate"]
+    logged = [g for g in gates if g.get("log")]
+    by_intent = Counter(g.get("kind") or "other" for g in logged)
+    transcripts = [e for e in entries if e.get("type") == "transcript"]
+    api_calls = [e for e in entries if e.get("type") == "api"]
+    pass_rate = round(len(logged) / len(gates), 3) if gates else 0.0
+
+    roster = load_roster()
+    roster["history"].append({
+        "type": "gate", "kind": "all", "decision": "live",
+        "pass_rate": pass_rate,
+        "by_intent": {i: by_intent.get(i, 0) for i in INTENTS if by_intent.get(i)},
+        "avg_seconds": 0.0,
+        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    totals = Counter(roster.get("totals") or {})
+    totals.update({"transcripts": len(transcripts), "logged": len(logged),
+                   "dropped": len(gates) - len(logged), "api_calls": len(api_calls)})
+    save_roster(roster, totals)
+    print(f"gate: {len(gates)} decisions, {len(logged)} logged ({pass_rate:.0%}) "
+          f"{dict(by_intent)}")
+    print(f"band: {len(transcripts)} transcripts | api: {len(api_calls)} calls")
+    print(f"roster written to {ROSTER}")
 
 
 def follow(path: Path, offset: int) -> int:
-    """Print new lines of a file as they appear; return the new offset."""
     if not path.exists():
         return offset
     with path.open(errors="replace") as fh:
         fh.seek(offset)
-        for line in fh:
-            print(f"  {line.rstrip()}", flush=True)
+        for raw in fh:
+            try:
+                entry = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            render = RENDER.get(entry.get("type"))
+            if render:
+                print("  " + render(entry), flush=True)
         return fh.tell()
 
 
-def raw_mode(stream_log: Path, api_log: Path) -> None:
-    """The literal stream: every transcript, gate label, route and API call."""
-    print(f"raw firehose\n  bridge stream: {stream_log}\n  server api:    {api_log}\n")
-    s_off, a_off = 0, 0
-    if stream_log.exists():
-        s_off = stream_log.stat().st_size
-        print(f"  (skipping {s_off} bytes already in the stream)\n")
-    if api_log.exists():
-        a_off = api_log.stat().st_size
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--stream-log", default=str(STREAM_LOG))
+    parser.add_argument("--api-log", default=str(API_LOG))
+    parser.add_argument("--summary", action="store_true", help="print the roster and exit")
+    args = parser.parse_args()
+    stream_log, api_log = Path(args.stream_log), Path(args.api_log)
+
+    if args.summary:
+        summary(stream_log, api_log)
+        return
+
+    print(f"watching decisions\n  bridge: {stream_log}\n  server: {api_log}\n")
+    s_off = stream_log.stat().st_size if stream_log.exists() else 0
+    a_off = api_log.stat().st_size if api_log.exists() else 0
     try:
         while True:
             s_off = follow(stream_log, s_off)
             a_off = follow(api_log, a_off)
             time.sleep(0.3)
     except KeyboardInterrupt:
-        print("\nstopped")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--records", default="http://localhost:8766")
-    parser.add_argument("--bridge-log", default="/tmp/bridge.log")
-    parser.add_argument("--interval", type=float, default=1.0)
-    parser.add_argument("--raw", action="store_true",
-                        help="literal firehose: every transcript, label, route and API line")
-    parser.add_argument("--stream-log", default="/tmp/stream.jsonl")
-    parser.add_argument("--api-log", default="/tmp/api.jsonl")
-    args = parser.parse_args()
-
-    if args.raw:
-        return raw_mode(Path(args.stream_log), Path(args.api_log))
-
-    token = auth()
-    base = args.records.split("?")[0] if "superserve" in args.records else args.records
-    print(f"watching {base} as device {dc.device_id(dc.load_or_create_secret())}", flush=True)
-    print("  band   = what the band heard and how it was labelled\n"
-          "  API    = a record that landed in the records API\n", flush=True)
-
-    known = snapshot(base, token)
-    print("existing records:", {k: len(v) for k, v in known.items() if v}, flush=True)
-    log_path = Path(args.bridge_log)
-    lines = len(log_path.read_text(errors="replace").splitlines()) if log_path.exists() else 0
-    try:
-        while True:
-            time.sleep(args.interval)
-            lines = tail_bridge(log_path, lines)
-            now = snapshot(base, token)
-            for kind in KINDS:
-                fresh = [i for i in now[kind] if i not in known.get(kind, [])]
-                if not fresh:
-                    continue
-                for rec in records_by_id(base, token, kind, fresh):
-                    print(f"  API   POST /{kind:<24} {describe(kind, rec)}", flush=True)
-                known[kind] = now[kind]
-    except KeyboardInterrupt:
-        print("\nstopped", flush=True)
+        print()
+        summary(stream_log, api_log)
+    except BrokenPipeError:   # piped into head/tee and the reader went away
+        pass
 
 
 if __name__ == "__main__":
