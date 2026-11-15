@@ -1536,7 +1536,15 @@ updateSev();
 route();
 (async () => {
   const a = auth();
-  if (a && !a.isUnlocked() && a.autoUnlock) { try { await a.autoUnlock(); } catch (_) { /* bridge not running */ } }
+  // the bridge may have been down at load: retry a few times, then let the person
+  // paste the key rather than sit on a silently empty dashboard
+  if (a && !a.isUnlocked() && a.autoUnlock) {
+    for (let i = 0; i < 3 && !a.isUnlocked(); i++) {
+      try { await a.autoUnlock(); } catch (_) { /* bridge not running */ }
+      if (!a.isUnlocked()) await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (!a.isUnlocked() && a.showUnlock) a.showUnlock();
+  }
   refresh();
   setInterval(refresh, REFRESH_MS);
 })();
