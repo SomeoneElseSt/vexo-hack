@@ -864,3 +864,8 @@ body.desktop .grab { display: none; }
   .note-table > tr > td, .note-table > tbody > tr > td { display: block; border-top: 0 !important; padding: 2px 8px 8px; }
   .note-actions .btn { width: 100%; }
 }
+
+/* Vexl mark is wide (plus, smile, dot): size it by width */
+.side-brand { width: 64px; }
+.side-brand svg { width: 50px; height: 30px; }
+.brand svg { width: 30px; height: 18px; }
