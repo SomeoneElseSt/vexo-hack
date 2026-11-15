@@ -123,76 +123,49 @@ function sevEl(sev) {
   s.setAttribute('aria-label', `Severity ${n} out of 10`);
   return s;
 }
-// severity as a small ring with the number inside (0-10); dashed ring when not rated
-function sevRing(sev, size) {
-  const n = Number(sev);
-  const rated = present(sev) && !Number.isNaN(n);
-  const w = el('span', 'ring ' + (!rated ? 'none' : n >= 7 ? 'high' : n >= 4 ? 'mid' : 'low'));
-  if (size) w.style.setProperty('--ring', size + 'px');
-  const NS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 36 36'); svg.setAttribute('aria-hidden', 'true');
-  const c = (cls, dash) => { const k = document.createElementNS(NS, 'circle'); k.setAttribute('cx', 18); k.setAttribute('cy', 18); k.setAttribute('r', 15); k.setAttribute('class', cls); if (dash) k.setAttribute('stroke-dasharray', dash); return k; };
-  svg.append(c('track'));
-  if (rated) svg.append(c('arc', `${(Math.max(n, 0.3) / 10) * 94.25} 94.25`));
-  w.append(svg, el('b', null, rated ? n : '–'));
-  w.setAttribute('role', 'img');
-  w.setAttribute('aria-label', rated ? `Severity ${n} out of 10` : 'Severity not rated');
-  w.title = rated ? `Severity ${n}/10` : 'Not rated';
-  return w;
-}
-// body-area icon for a symptom
-function locIcon(e) {
-  const t = `${e.body_location || ''} ${e.quality || ''}`.toLowerCase();
-  if (/chest|heart/.test(t)) return 'heart';
-  if (/breath|lung/.test(t)) return 'lungs';
-  if (/head|dizz|eye|ear|throat|neck/.test(t)) return 'head';
-  if (/abdom|stomach|nausea|belly/.test(t)) return 'stomach';
-  if (/arm|leg|back|knee|hand|foot/.test(t)) return 'body';
-  return 'symptom';
-}
-function shortWhen(p) {
-  if (!p) return '–';
-  const d = dayDiff(p);
-  if (d === 0) return clock(p);
-  if (d === 1) return 'Yesterday';
-  if (d > 1 && d < 7) return weekday(p);
-  return `${MON[p.mo - 1]} ${p.d}`;
-}
-// today's scheduled times for a medication: taken / due / missed
-function doseStatus(m) {
-  const now = new Date(); const mins = now.getHours() * 60 + now.getMinutes();
-  const takenToday = state.doses.filter((x) => x.medication_id === m.id && dayDiff(parseTs(doseTime(x)) || { y: 1970, mo: 1, d: 1 }) === 0).length;
-  return (m.times || []).slice().sort().map((t, i) => {
-    const [h, mi] = String(t).split(':').map(Number);
-    const at = h * 60 + (mi || 0);
-    return { t, state: i < takenToday ? 'taken' : at < mins ? 'missed' : 'due' };
-  });
-}
-function doseChips(m) {
-  const box = el('span', 'chips-dose');
-  const st = doseStatus(m);
-  if (!st.length) { box.append(el('span', 'dchip asneeded', 'As needed')); return box; }
-  st.forEach((x) => {
-    const c = el('span', 'dchip ' + x.state);
-    c.append(icon(x.state === 'taken' ? 'check' : 'clock'), document.createTextNode(hhmm(x.t)));
-    c.title = x.state === 'taken' ? 'Taken today' : x.state === 'missed' ? 'Not taken yet' : 'Due later today';
-    box.append(c);
-  });
-  return box;
-}
-// last 7 days: a square per day, filled when a dose was taken
-function weekStrip(m) {
-  const w = el('span', 'week');
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i);
-    const n = state.doses.filter((x) => { const p = parseTs(doseTime(x)); return x.medication_id === m.id && p && p.y === d.getFullYear() && p.mo === d.getMonth() + 1 && p.d === d.getDate(); }).length;
-    const c = el('i', n ? 'on' : '');
-    c.title = `${WD[d.getDay()]} ${MON[d.getMonth()]} ${d.getDate()}: ${n ? n + ' taken' : 'none logged'}`;
-    w.append(c);
-  }
-  return w;
-}
 const sevText = (sev) => (present(sev) && !Number.isNaN(Number(sev)) ? `${Number(sev)}/10` : null);
+// ---------- body figure: where a symptom was reported ----------
+// Front-facing figure in a 100 x 200 box. Built with DOM calls, never from patient text.
+const BODY = {
+  head:    { label: 'Head',    words: ['head', 'face', 'eye', 'ear', 'nose', 'mouth', 'throat', 'neck', 'jaw'], at: [50, 18] },
+  chest:   { label: 'Chest',   words: ['chest', 'heart', 'lung', 'breast', 'rib'], at: [50, 58] },
+  abdomen: { label: 'Abdomen', words: ['abdomen', 'stomach', 'belly', 'gut'], at: [50, 82] },
+  back:    { label: 'Back',    words: ['back', 'spine'], at: [50, 68] },
+  arm:     { label: 'Arm',     words: ['arm', 'elbow', 'wrist', 'hand', 'finger', 'shoulder'], at: [22.5, 74], limb: true },
+  leg:     { label: 'Leg',     words: ['leg', 'knee', 'thigh', 'shin', 'calf', 'foot', 'ankle', 'toe', 'hip'], at: [41.5, 150], limb: true },
+};
+function regionOf(location) {
+  const t = String(location || '').toLowerCase();
+  if (!t) return null;
+  const key = Object.keys(BODY).find((k) => BODY[k].words.some((w) => t.includes(w)));
+  if (!key) return null;
+  // the figure faces us: the patient's left is on our right
+  return { key, side: /\bleft\b/.test(t) ? 'left' : /\bright\b/.test(t) ? 'right' : null };
+}
+// marks: [{ key, side, n }]; n scales the marker on the summary figure
+function bodyFig(marks, cls) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => { const n = document.createElementNS(NS, tag); Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v)); return n; };
+  const svg = mk('svg', { viewBox: '0 0 100 200', class: 'bodyfig ' + (cls || ''), role: 'img' });
+  const g = mk('g', { class: 'bodyfig-shape' });
+  g.append(mk('circle', { cx: 50, cy: 18, r: 13 }), mk('rect', { x: 45, y: 29, width: 10, height: 10 }),
+    mk('rect', { x: 30, y: 37, width: 40, height: 62, rx: 12 }),
+    mk('rect', { x: 18, y: 40, width: 9, height: 62, rx: 4.5 }), mk('rect', { x: 73, y: 40, width: 9, height: 62, rx: 4.5 }),
+    mk('rect', { x: 35, y: 92, width: 13, height: 104, rx: 6.5 }), mk('rect', { x: 52, y: 92, width: 13, height: 104, rx: 6.5 }));
+  svg.append(g);
+  const names = [];
+  (marks || []).filter((m) => m && BODY[m.key]).forEach((m) => {
+    const b = BODY[m.key];
+    const r = m.n ? Math.min(5 + m.n * 1.2, 13) : 6.5;
+    const spots = !b.limb ? [b.at] : m.side === 'left' ? [[100 - b.at[0], b.at[1]]] : m.side === 'right' ? [b.at] : [b.at, [100 - b.at[0], b.at[1]]];
+    spots.forEach(([x, y]) => svg.append(mk('circle', { cx: x, cy: y, r, class: 'bodyfig-halo' }), mk('circle', { cx: x, cy: y, r: Math.max(r * 0.42, 2.6), class: 'bodyfig-dot' })));
+    names.push(b.label);
+  });
+  svg.setAttribute('aria-label', names.length ? `Body location: ${names.join(', ')}` : 'Body location not stated');
+  return svg;
+}
+function symptomFig(e, cls) { const r = regionOf(e.body_location); return bodyFig(r ? [{ ...r, n: cls === 'fig-row' ? 5 : 2 }] : [], cls); }
+
 function symptomTitle(e) {
   if (present(e.quality) && present(e.body_location)) return `${cap(e.quality)}, ${e.body_location}`;
   return cap(e.quality) || cap(e.body_location) || 'Symptom';
@@ -334,7 +307,8 @@ function symptomSheet(e) {
       ['Severity', sevText(e.severity)],
       ['Context', e.activity],
     ]));
-    b.append(sectionLabel('History of Present Illness'), g);
+    const hp = el('div', 'hpi-with-fig'); hp.append(symptomFig(e, 'fig-sheet'), g);
+    b.append(sectionLabel('History of Present Illness'), hp);
     if (present(e.verbatim_quote)) {
       const q = el('div', 'group'); q.append(el('p', 'prose quote', `“${e.verbatim_quote}”`));
       b.append(sectionLabel('Patient Statement'), q);
@@ -352,16 +326,15 @@ function symptomSheet(e) {
 
 // ---------- rows ----------
 function symptomRow(e, isNew) {
-  const r = el('button', 'row row-link srow' + (isNew ? ' new' : ''));
+  const r = el('button', 'row row-link' + (isNew ? ' new' : ''));
   r.type = 'button';
-  const ic = el('span', 'loc-ico'); ic.append(icon(locIcon(e)));
+  const p = parseTs(e.ts);
+  r.append(el('span', 'time-col', p ? clock(p) || '–' : '–'), symptomFig(e, 'fig-row'));
   const m = el('span', 'row-main');
   m.append(el('span', 'row-title', symptomTitle(e)));
-  if (present(e.activity)) m.append(el('span', 'row-sub', cap(e.activity)));
-  const end = el('span', 'srow-end');
-  end.append(el('span', 'row-meta', shortWhen(parseTs(e.ts))));
-  if (e.source === 'band') { const b = el('span', 'src'); b.title = 'Spoken on band'; b.append(icon('mic')); end.append(b); }
-  r.append(ic, m, end, sevRing(e.severity));
+  const sub = [e.activity ? cap(e.activity) : null, present(e.verbatim_quote) ? `“${e.verbatim_quote}”` : null].filter(Boolean).join(' · ');
+  if (sub) m.append(el('span', 'row-sub', sub));
+  r.append(m, sevEl(e.severity), icon('chev', 'chev'));
   r.addEventListener('click', () => symptomSheet(e));
   return r;
 }
@@ -385,37 +358,43 @@ function visitRow(v, opts = {}) {
 }
 
 function medRow(m) {
-  const d = el('div', 'med' + (m.confirmed_at ? '' : ' to-review'));
-  const top = el('div', 'med-top');
-  const ic = el('span', 'med-ico'); ic.append(icon('med'));
-  const t = el('div', 'row-main');
-  const nm = el('p', 'med-name'); nm.append(el('b', null, m.name || 'Medication'), el('span', 'med-dose', m.dose || ''));
-  t.append(nm);
-  if (present(m.instructions)) t.append(el('p', 'med-sig', cap(m.instructions)));
-  top.append(ic, t);
-  if (m.confirmed_at) {
-    const ok = el('span', 'med-ok'); ok.title = m.confirmed_by === 'clinician' ? 'Reviewed by clinician' : 'Reviewed by you'; ok.append(icon('check'));
-    top.append(ok);
-  } else {
-    const b = button('Review', 'btn-primary btn-sm');
-    b.title = 'Check the name, dose and times, then mark as reviewed';
-    b.addEventListener('click', () => confirmMed(m, b));
-    top.append(b);
-  }
-  d.append(top);
-
-  const row = el('div', 'med-row');
-  row.append(doseChips(m));
-  if ((m.times || []).length) { const wk = el('span', 'med-week'); wk.append(el('span', 'med-week-l', '7 days'), weekStrip(m)); row.append(wk); }
-  if (m.confirmed_at && state.have.doses) {
-    const b = button('Taken', 'btn-sm btn-take', null, 'check');
-    b.title = 'Mark a dose as taken now';
-    b.addEventListener('click', () => logDose(m, b));
-    row.append(b);
-  }
-  d.append(row);
-  const meta = [m.prescribed_by, m.end ? `until ${MON[parseTs(m.end).mo - 1]} ${parseTs(m.end).d}` : null].filter(Boolean).join(' · ');
+  const d = el('div', 'med');
+  d.append(el('p', 'med-name', [m.name, m.dose].filter(present).join(' ') || 'Medication'));
+  const s = sig(m);
+  if (s) d.append(el('p', 'med-sig', s));
+  const meta = [m.prescribed_by ? `Prescribed by ${m.prescribed_by}` : null, m.start ? `Started ${shortDate(parseTs(m.start))}` : null,
+    m.end ? `Ends ${shortDate(parseTs(m.end))}` : null].filter(Boolean).join(' · ');
   if (meta) d.append(el('p', 'med-meta', meta));
+
+  const taken = state.doses.filter((x) => x.medication_id === m.id).sort((a, b) => doseTime(b).localeCompare(doseTime(a)));
+  if (taken.length) {
+    const t = el('div', 'taken');
+    taken.slice(0, 3).forEach((x) => {
+      const line = el('div', 'taken-line');
+      line.append(icon(x.method === 'voice' ? 'mic' : 'check'), el('span', null, 'Taken '), el('b', null, whenText(parseTs(doseTime(x)))),
+        el('span', null, x.method === 'voice' ? ' · said on band' : ' · logged in app'));
+      if (present(x.verbatim_quote)) line.title = `“${x.verbatim_quote}”`;
+      t.append(line);
+    });
+    d.append(t);
+  }
+
+  const foot = el('div', 'med-foot');
+  if (m.confirmed_at) {
+    const f = el('span', 'med-flag ok'); f.append(icon('check'), document.createTextNode(m.confirmed_by === 'clinician' ? 'Reviewed by clinician' : 'Reviewed by you'));
+    foot.append(f);
+  } else {
+    const f = el('span', 'med-flag todo'); f.append(icon('todo'), document.createTextNode('Not yet reviewed'));
+    const b = button('Mark as Reviewed', 'btn-primary btn-sm');
+    b.addEventListener('click', () => confirmMed(m, b));
+    foot.append(f, b);
+  }
+  if (m.confirmed_at && state.have.doses) {
+    const b = button('Mark as Taken', 'btn-sm', null, 'check');
+    b.addEventListener('click', () => logDose(m, b));
+    foot.append(b);
+  }
+  d.append(foot);
   return d;
 }
 
@@ -674,13 +653,22 @@ function renderVisit(id) {
 
 function renderMeds() {
   const toReview = state.meds.filter((m) => !m.confirmed_at);
-  $('med-todo').replaceChildren();
+  const t = $('med-todo');
+  t.replaceChildren();
+  if (toReview.length) {
+    const c = el('div', 'locked');
+    c.append(icon('todo'));
+    const m = el('div', 'row-main');
+    m.append(el('span', 'row-title', 'Review your medication list'), el('span', 'row-sub', 'Check each medication, dose and time, then mark it as reviewed.'));
+    c.append(m);
+    t.append(c);
+  }
   const out = [];
   const meds = [...state.meds].sort((a, b) => (a.confirmed_at ? 1 : 0) - (b.confirmed_at ? 1 : 0) || String(a.name).localeCompare(String(b.name)));
   if (meds.length) {
     const g = el('div', 'group');
     meds.forEach((m) => g.append(medRow(m)));
-    out.push(sectionLabel('Current Medications', toReview.length ? `${toReview.length} to review` : `${meds.length}`, null), g);
+    out.push(sectionLabel('Current Medications', `${meds.length}`, null), g);
   } else {
     const g = el('div', 'group'); g.style.marginTop = '14px';
     g.append(emptyBox('No medications on file', 'Medications your clinician prescribes appear here for you to review.'));
@@ -867,73 +855,148 @@ function dEmpty(title, body) { const d = el('div', 'dempty'); d.append(icon('doc
 
 function renderDash(sorted) {
   const h = new Date().getHours();
-  $('dash-line').hidden = true;
-  $('dash-banner').hidden = true;
-  const lv = pastVisits()[0];
+  $('dash-greet').textContent = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+  // Upcoming Visits: the big card
+  const hv = $('dc-upcoming');
+  hv.replaceChildren();
+  const ups = upcoming();
+  const hh = el('div', 'dhero-head'); hh.append(el('span', null, 'Upcoming Visits'));
+  const allv = el('a', null, 'All Visits'); allv.href = '#visits'; hh.append(allv);
+  hv.append(hh);
+  if (ups.length) {
+    const u = ups[0];
+    const main = el('div', 'dhero-main');
+    main.append(dateTile(u.p));
+    const m = el('div', 'dhero-text');
+    m.append(el('h3', null, u.scheduled ? u.title : 'Follow-up Visit'));
+    const meta = el('div', 'dhero-meta');
+    const ln = (ic, t) => { if (!present(t)) return; const d = el('span'); d.append(icon(ic), document.createTextNode(t)); meta.append(d); };
+    ln('clock', [`${weekday(u.p)}, ${MON[u.p.mo - 1]} ${u.p.d}`, u.p.h !== null ? clock(u.p) : null].filter(Boolean).join(' · '));
+    ln('person', [u.v.clinician, u.v.specialty].filter(present).join(' · '));
+    m.append(meta);
+    main.append(m);
+    hv.append(main);
+    const acts = el('div', 'dhero-actions');
+    acts.append(link('Details', u.scheduled ? '#visits' : '#visit/' + encodeURIComponent(u.v.id), 'btn btn-light'),
+      link('Health Summary', '#summary', 'btn btn-ghost-light'));
+    hv.append(acts);
+    if (ups.length > 1) {
+      const more = el('div', 'dhero-more');
+      ups.slice(1, 3).forEach((x) => { const r = el('span'); r.append(el('b', null, `${MON[x.p.mo - 1]} ${x.p.d}`), document.createTextNode(` ${x.scheduled ? x.title : 'Follow-up Visit'} · ${x.v.clinician || ''}`)); more.append(r); });
+      hv.append(more);
+    }
+  } else {
+    hv.append(el('p', 'dhero-empty', 'No upcoming visits'));
+  }
 
-  // To Do: one line each, with what to act on shown as chips
+  // two quick numbers beside it
+  const gl = $('dc-glance');
+  gl.replaceChildren();
+  const nd = nextDose(state.meds);
+  const lat = sorted[0];
+  const tile = (hue, ic, label, valueEl, subText, href) => {
+    const a = el('a', 'dcard dmini'); a.href = href; a.dataset.hue = hue;
+    const t = el('span', 'glance-top'); const i = el('span', 'glance-ico'); i.append(icon(ic)); t.append(i, el('span', 'glance-label', label));
+    a.append(t, valueEl, el('span', 'glance-sub', subText));
+    return a;
+  };
+  gl.append(nd ? tile('amber', 'med', 'Next Dose', el('span', 'glance-value', hhmm(nd.t)), nd.med.name || '', '#medications')
+    : tile('amber', 'med', 'Medications', el('span', 'glance-value', `${state.meds.length}`), 'None due today', '#medications'));
+  if (lat) { const v = sevEl(lat.severity); v.className += ' glance-value'; gl.append(tile('rose', 'symptom', 'Latest Symptom', v, symptomTitle(lat), '#symptoms')); }
+  else gl.append(tile('rose', 'symptom', 'Latest Symptom', el('span', 'glance-value', '—'), 'None logged', '#log'));
+
+  // To Do's
   const todo = $('dc-todo');
   todo.replaceChildren(dcardHead('To Do'));
-  const list = el('div', 'dlist');
-  const review = state.meds.filter((m) => !m.confirmed_at);
-  const todoRow = (ic, title, chips, href) => {
-    const a = el('a', 'drow todo-row'); a.href = href;
-    const i = el('span', 'drow-ico'); i.append(icon(ic));
-    const m = el('span', 'row-main'); m.append(el('span', 'row-title', title));
-    if (chips.length) { const c = el('span', 'tchips'); chips.forEach((x) => c.append(el('span', 'tchip', x))); m.append(c); }
-    a.append(i, m, icon('chev', 'chev'));
-    list.append(a);
-  };
-  if (review.length) todoRow('med', review.length === 1 ? `Review ${review[0].name}` : `Review ${review.length} medications`, [], '#medications');
-  if (lv && dayDiff(parseTs(lv.ts) || { y: 1970, mo: 1, d: 1 }) <= 7) todoRow('doc', 'Read After Visit Summary', [], '#visit/' + encodeURIComponent(lv.id));
-  const missed = state.meds.filter((m) => m.confirmed_at && doseStatus(m).some((x) => x.state === 'missed'));
-  if (missed.length) todoRow('clock', missed.length === 1 ? `Mark ${missed[0].name} dose` : `Mark ${missed.length} doses`, [], '#medications');
-  if (list.childElementCount) todo.append(list); else todo.append(dEmpty('All done', 'Nothing to do right now.'));
+  const items = [];
+  state.meds.filter((m) => !m.confirmed_at).forEach((m) => items.push(['med', `Review ${m.name || 'medication'}`, '', '#medications']));
+  const lv = pastVisits()[0];
+  if (lv && dayDiff(parseTs(lv.ts) || { y: 1970, mo: 1, d: 1 }) <= 7) items.push(['doc', 'After Visit Summary', '', '#visit/' + encodeURIComponent(lv.id)]);
+  if (items.length) {
+    const list = el('div', 'dlist');
+    items.forEach(([ic, t, s, href]) => {
+      const a = el('a', 'drow'); a.href = href;
+      const i = el('span', 'drow-ico'); i.append(icon(ic));
+      const m = el('span', 'row-main'); m.append(el('span', 'row-title', t));
+      a.append(i, m, icon('chev', 'chev'));
+      list.append(a);
+    });
+    todo.append(list);
+  } else todo.append(dEmpty('Nothing to do', ''));
 
-  // Recent Symptoms
+  // Recent Symptoms: where, what, when, how bad
   const sy = $('dc-symptoms');
   sy.replaceChildren(dcardHead('Recent Symptoms', 'View all', '#symptoms'));
   if (sorted.length) {
-    const g = el('div', 'dlist');
-    sorted.slice(0, 5).forEach((e) => g.append(symptomRow(e, false)));
-    sy.append(g);
-  } else sy.append(dEmpty('No symptoms logged', 'Tap the band and describe what you feel.'));
+    const list = el('div', 'dlist');
+    sorted.slice(0, 4).forEach((e) => {
+      const r = el('button', 'drow'); r.type = 'button';
+      const m = el('span', 'row-main');
+      m.append(el('span', 'row-title', symptomTitle(e)), el('span', 'row-sub', whenText(parseTs(e.ts))));
+      r.append(symptomFig(e, 'fig-row'), m, sevEl(e.severity));
+      r.addEventListener('click', () => symptomSheet(e));
+      list.append(r);
+    });
+    sy.append(list);
+  } else sy.append(dEmpty('No symptoms logged', ''));
 
-  // Track My Health: numbers + chart
+  // By Body Location: one figure, a marker per reported area
+  const bc = $('dc-body');
+  bc.replaceChildren(dcardHead('Body Location'));
+  const byRegion = {};
+  let unplaced = 0;
+  state.events.forEach((e) => { const r = regionOf(e.body_location); if (r) byRegion[r.key] = (byRegion[r.key] || 0) + 1; else unplaced++; });
+  const regions = Object.entries(byRegion).sort((a, b) => b[1] - a[1]);
+  if (state.events.length) {
+    const wrap = el('div', 'bodycard');
+    wrap.append(bodyFig(regions.map(([key, n]) => ({ key, n })), 'fig-card'));
+    const ul = el('ul', 'bodylist');
+    const max = Math.max(...regions.map(([, n]) => n), 1);
+    regions.forEach(([key, n]) => {
+      const li = el('li');
+      const bar = el('span', 'bodybar'); const fill = el('i'); fill.style.width = `${(n / max) * 100}%`; bar.append(fill);
+      li.append(el('span', 'bodyname', BODY[key].label), bar, el('b', null, n));
+      ul.append(li);
+    });
+    if (unplaced) { const li = el('li', 'muted'); li.append(el('span', 'bodyname', 'Not stated'), el('span', 'bodybar'), el('b', null, unplaced)); ul.append(li); }
+    wrap.append(ul);
+    bc.append(wrap);
+  } else bc.append(dEmpty('No symptoms logged', ''));
+
+  // Track My Health: severity over 14 days, wide
   const tr = $('dc-trend');
   const rated = state.events.filter((e) => present(e.severity));
   const avg = rated.length ? (rated.reduce((n, e) => n + Number(e.severity), 0) / rated.length).toFixed(1) : null;
-  tr.replaceChildren(dcardHead('Track My Health', 'Symptoms', '#symptoms'));
+  const head = dcardHead('Track My Health', 'Last 14 days', '#symptoms');
+  tr.replaceChildren(head);
   const sub = el('div', 'dstats');
   const stat = (label, value) => { const d = el('div', 'dstat'); d.append(el('span', 'dstat-v', value), el('span', 'dstat-l', label)); sub.append(d); };
   const last14 = state.events.filter((e) => { const p = parseTs(e.ts); return p && dayDiff(p) < 14; });
   stat('Symptoms', `${last14.length}`);
-  stat('Avg severity', avg ? `${avg}` : '—');
-  stat('Highest', rated.length ? `${Math.max(...rated.map((e) => Number(e.severity)))}` : '—');
+  stat('Average', avg ? `${avg}/10` : '—');
+  stat('Highest', rated.length ? `${Math.max(...rated.map((e) => Number(e.severity)))}/10` : '—');
   const days = new Set(last14.map((e) => { const p = parseTs(e.ts); return `${p.y}-${p.mo}-${p.d}`; }));
-  stat('Days', `${days.size}/14`);
+  stat('Days', `${days.size}`);
   tr.append(sub, severityChart());
 
-  // Medications: tiles with today's doses and the last 7 days
+  // Medications
   const md = $('dc-meds');
   md.replaceChildren(dcardHead('Medications', 'Details', '#medications'));
   if (state.meds.length) {
-    const g = el('div', 'dlist');
+    const list = el('div', 'dlist');
+    const nd = nextDose(state.meds);
     state.meds.forEach((m) => {
-      const a = el('a', 'drow mtile' + (m.confirmed_at ? '' : ' to-review')); a.href = '#medications';
-      const top = el('span', 'mtile-top');
+      const a = el('a', 'drow'); a.href = '#medications';
       const i = el('span', 'drow-ico amber'); i.append(icon('med'));
-      const nm = el('span', 'row-main'); nm.append(el('span', 'row-title', m.name || 'Medication'), el('span', 'row-sub', m.dose || ''));
-      top.append(i, nm);
-      if (m.confirmed_at) { const ok = el('span', 'med-ok'); ok.title = 'Reviewed'; ok.append(icon('check')); top.append(ok); }
-      else top.append(el('span', 'tchip warn', 'Review'));
-      a.append(top, doseChips(m));
-      if ((m.times || []).length) a.append(weekStrip(m));
-      g.append(a);
+      const mm = el('span', 'row-main');
+      mm.append(el('span', 'row-title', m.name || 'Medication'), el('span', 'row-sub', m.dose || ''));
+      const end = el('span', 'drow-end');
+      end.append(el('span', 'row-meta strong' + (m.confirmed_at ? '' : ' warn'), !m.confirmed_at ? 'Review' : nd && nd.med.id === m.id ? hhmm(nd.t) : (m.times || []).length ? (m.times || []).map(hhmm).join(', ') : 'As needed'));
+      a.append(i, mm, end);
+      list.append(a);
     });
-    md.append(g);
-  } else md.append(dEmpty('No medications on file', 'Prescriptions from your visits appear here.'));
-
+    md.append(list);
+  } else md.append(dEmpty('No medications on file', ''));
 }
 
 // bar chart: highest severity each day for 14 days (empty bar = nothing rated)
@@ -942,7 +1005,7 @@ function severityChart() {
   const days = [];
   const now = new Date();
   for (let i = 13; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i); days.push(d); }
-  const W = 940, H = 110, pad = 22, bw = (W - pad) / 14;
+  const W = 640, H = 120, pad = 22, bw = (W - pad) / 14;
   const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('viewBox', `0 0 ${W} ${H + 22}`);
@@ -1040,13 +1103,12 @@ function renderRail() {
     if (it.kind === 'symptom') {
       a.href = '#symptoms';
       top.append(el('span', null, symptomTitle(it.e)));
-      a.append(top, el('span', 'ev-time', clock(p)));
-      if (present(it.e.activity)) a.append(el('span', 'ev-sub', cap(it.e.activity)));
+      a.append(top, el('span', 'ev-time', [clock(p), sevText(it.e.severity)].filter(Boolean).join(' · ')));
       a.addEventListener('click', (ev) => { ev.preventDefault(); symptomSheet(it.e); });
     } else if (it.kind === 'dose') {
       a.href = '#medications';
       top.append(el('span', null, cap(it.d.medication_name) || 'Medication'));
-      a.append(top, el('span', 'ev-time', clock(p)));
+      a.append(top, el('span', 'ev-time', `Taken ${clock(p)}`));
     } else {
       a.href = '#visit/' + encodeURIComponent(it.v.id);
       top.append(el('span', null, it.kind === 'followup' ? 'Follow-up Visit' : (it.v.specialty || 'Office Visit')));
@@ -1096,6 +1158,18 @@ if (DESKTOP) {
     else if (y < lastY - 4) bar.classList.remove('tucked');
     lastY = y;
   }, { passive: true });
+  const railBtn = $('rail-toggle');
+  const setRail = (open) => {
+    $('desk').classList.toggle('rail-off', !open);
+    railBtn.setAttribute('aria-expanded', String(open));
+    const t = open ? 'Hide calendar' : 'Show calendar';
+    railBtn.setAttribute('aria-label', t); railBtn.title = t;
+    try { localStorage.setItem('vexo-rail', open ? 'open' : 'closed'); } catch (e) { /* storage off */ }
+  };
+  let railOpen = true;
+  try { railOpen = localStorage.getItem('vexo-rail') !== 'closed'; } catch (e) { /* storage off */ }
+  setRail(railOpen);
+  railBtn.addEventListener('click', () => setRail($('desk').classList.contains('rail-off')));
   $('desk-search').addEventListener('input', (e) => { $('search').value = e.target.value; state.filter.q = e.target.value; if (!location.hash.startsWith('#symptoms')) location.hash = '#symptoms'; renderAll(); });
 }
 window.matchMedia('(min-width: 1100px)').addEventListener('change', (e) => { if (!params.get('view') && e.matches !== DESKTOP) location.reload(); });
@@ -1199,7 +1273,44 @@ $('composer').addEventListener('submit', async (ev) => {
 });
 
 // ---------- share: export + import ----------
-document.querySelectorAll('[data-export]').forEach((a) => { a.href = API + a.dataset.export; a.target = '_blank'; a.rel = 'noopener'; });
+const FORMATS = {
+  fhir: { tag: 'FHIR', name: 'Clinical record', why: 'Imports into a clinic\'s electronic health record.', url: '/export/fhir' },
+  ips:  { tag: 'IPS',  name: 'International Patient Summary', why: 'A summary any doctor can open, in any country.', url: '/export/ips' },
+  csv:  { tag: 'CSV',  name: 'Spreadsheet', why: 'One row per symptom, for Excel or Numbers.', url: '/export/csv' },
+  json: { tag: 'JSON', name: 'Full backup', why: 'Everything, exactly as stored.', url: '/export/json' },
+};
+const WHERE = [['us', 'United States'], ['eu', 'Europe'], ['other', 'Somewhere else'], ['unsure', 'Not sure']];
+const ORDER = { us: ['fhir', 'ips', 'csv', 'json'], eu: ['ips', 'fhir', 'csv', 'json'], other: ['ips', 'fhir', 'csv', 'json'], unsure: ['ips', 'fhir', 'csv', 'json'], me: ['csv', 'json', 'ips', 'fhir'] };
+const share = { who: 'clinic', where: 'us' };
+function renderShare() {
+  const box = $('share-flow');
+  const out = [];
+  const question = (label, options, value, onPick) => {
+    const seg = el('div', 'segmented'); seg.setAttribute('role', 'tablist'); seg.setAttribute('aria-label', label);
+    options.forEach(([v, text]) => {
+      const b = el('button', null, text); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(v === value));
+      b.addEventListener('click', () => { onPick(v); renderShare(); });
+      seg.append(b);
+    });
+    out.push(sectionLabel(label), seg);
+  };
+  question('Who is this for?', [['clinic', 'A doctor or clinic'], ['me', 'Myself']], share.who, (v) => { share.who = v; });
+  if (share.who === 'clinic') question('Where is the doctor or clinic?', WHERE, share.where, (v) => { share.where = v; });
+  const order = ORDER[share.who === 'me' ? 'me' : share.where];
+  const fmtRow = (key, primary) => {
+    const f = FORMATS[key];
+    const a = el('a', 'row row-link' + (primary ? ' fmt-primary' : '')); a.href = API + f.url; a.target = '_blank'; a.rel = 'noopener';
+    const m = el('span', 'row-main'); m.append(el('span', 'row-title', f.name), el('span', 'row-sub wrap', f.why));
+    a.append(el('span', 'fmt-tag', f.tag), m, primary ? el('span', 'btn btn-primary btn-sm', 'Download') : icon('chev', 'chev'));
+    return a;
+  };
+  const best = el('div', 'group'); best.append(fmtRow(order[0], true));
+  out.push(sectionLabel('Recommended'), best);
+  const rest = el('div', 'group'); order.slice(1).forEach((k) => rest.append(fmtRow(k, false)));
+  out.push(sectionLabel('Other formats'), rest);
+  box.replaceChildren(...out);
+}
+renderShare();
 $('import-file').addEventListener('change', async (e) => {
   const file = e.target.files && e.target.files[0];
   const msg = $('import-msg');
