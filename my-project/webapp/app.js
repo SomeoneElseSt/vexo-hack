@@ -20,6 +20,7 @@ const ROUTES = {
   log:         { tab: 'symptoms', title: 'Log a Symptom', back: ['#symptoms', 'Symptoms'] },
   visits:      { tab: 'visits', title: 'Visits' },
   visit:       { tab: 'visits', title: 'After Visit Summary', back: ['#visits', 'Visits'] },
+  review:      { tab: 'visits', title: 'Review Visit Note', back: ['#visits', 'Visits'] },
   medications: { tab: 'medications', title: 'Medications' },
   summary:     { tab: 'summary', title: 'Health Summary' },
   share:       { tab: 'summary', title: 'Export My Record', back: ['#summary', 'Summary'] },
@@ -204,7 +205,7 @@ function sig(m) {
 
 // ---------- state ----------
 const state = {
-  events: [], visits: [], meds: [], doses: [], msgs: [],
+  events: [], visits: [], drafts: [], meds: [], doses: [], msgs: [],
   have: { visits: false, meds: false, doses: false, msgs: false },
   locked: false, online: null,
   filter: { q: '', src: 'all', loc: '' },
@@ -239,7 +240,10 @@ async function refresh() {
       SHOW_MESSAGES ? load('/Communication') : none,
     ]);
     state.events = obs.items;
-    state.visits = enc.items; state.have.visits = !enc.missing;
+    // a recorded visit is only an After Visit Summary once the clinician approves it
+    state.visits = enc.items.filter((v) => !v.status || v.status === 'final');
+    state.drafts = enc.items.filter((v) => v.status === 'draft' || v.status === 'recording');
+    state.have.visits = !enc.missing;
     state.meds = med.items; state.have.meds = !med.missing;
     state.doses = adm.items; state.have.doses = !adm.missing;
     state.msgs = msg.items; state.have.msgs = !msg.missing;
@@ -417,6 +421,7 @@ function renderHome(sorted) {
   // To Do, like MyChart's to-do list
   const todo = [];
   const toReview = state.meds.filter((m) => !m.confirmed_at);
+  state.drafts.filter((v) => v.status === 'draft').forEach((v) => todo.push(['doc', 'Approve visit note', [v.clinician, shortDate(parseTs(v.ts))].filter(present).join(', '), '#review/' + encodeURIComponent(v.id)]));
   if (toReview.length) todo.push(['med', 'Review your medication list', `${toReview.length} new from your last visit`, '#medications']);
   const lv = pastVisits()[0];
   if (lv && dayDiff(parseTs(lv.ts) || { y: 1970, mo: 1, d: 1 }) <= 7) todo.push(['doc', 'Read your After Visit Summary', `${lv.clinician || 'Your visit'}, ${dayName(parseTs(lv.ts))}`, '#visit/' + encodeURIComponent(lv.id)]);
@@ -566,6 +571,7 @@ function upcoming() {
 }
 
 function renderVisits() {
+  const waiting = draftGroup();
   document.querySelectorAll('#seg-visits [data-v]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.v === state.visitsTab)));
   const out = [];
   if (state.visitsTab === 'upcoming') {
@@ -594,7 +600,7 @@ function renderVisits() {
       out.push(g);
     }
   }
-  $('visit-list').replaceChildren(...out);
+  $('visit-list').replaceChildren(...waiting, ...out);
 }
 
 function renderVisit(id) {
@@ -630,6 +636,12 @@ function renderVisit(id) {
     steps.forEach((t, i) => { const li = el('li'); li.append(el('span', 'n', `${i + 1}.`), el('span', null, t)); ol.append(li); });
     g.append(ol); out.push(sectionLabel('Instructions'), g);
   }
+  const tests = (v.tests_ordered || []).filter(present);
+  if (tests.length) {
+    const g = el('div', 'group'); const ol = el('ol', 'ol');
+    tests.forEach((t, i) => { const li = el('li'); li.append(el('span', 'n', `${i + 1}.`), el('span', null, t)); ol.append(li); });
+    g.append(ol); out.push(sectionLabel('Tests Ordered'), g);
+  }
   const meds = state.meds.filter((m) => m.visit_id === v.id || (v.medication_ids || []).includes(m.id));
   if (meds.length) {
     const g = el('div', 'group');
@@ -647,8 +659,167 @@ function renderVisit(id) {
     related.forEach((e) => g.append(symptomRow(e, false)));
     out.push(sectionLabel('Symptoms Discussed'), g);
   }
-  out.push(el('p', 'footnote', `${v.source ? 'Source: ' + v.source + '. ' : ''}This summary is not part of your hospital's legal medical record.`));
+  out.push(el('p', 'footnote', `${v.approved_by ? 'Approved by ' + v.approved_by + '. ' : ''}${v.source ? 'Source: ' + v.source + '. ' : ''}This summary is not part of your hospital's legal medical record.`));
   box.replaceChildren(...out);
+}
+
+// ---------- clinician review: a recorded visit is saved only after approval ----------
+// The band records the visit between "I'm with the doctor" and "the meeting is done";
+// a local model drafts the note. Nothing reaches the patient's record until the
+// clinician checks it here and approves it.
+function draftGroup() {
+  if (!state.drafts.length) return [];
+  const g = el('div', 'group');
+  [...state.drafts].sort(newestFirst).forEach((v) => {
+    const p = parseTs(v.ts);
+    const rec = v.status === 'recording';
+    const r = el(rec ? 'div' : 'a', 'row' + (rec ? '' : ' row-link'));
+    if (!rec) r.href = '#review/' + encodeURIComponent(v.id);
+    const i = el('span', 'row-ico'); i.append(icon(rec ? 'mic' : 'doc'));
+    const m = el('span', 'row-main');
+    m.append(el('span', 'row-title', rec ? 'Recording visit' : 'Visit note to approve'),
+      el('span', 'row-sub', rec ? `Started ${p ? clockText(p) : ''} · say “the meeting is done” to finish` : [v.clinician, p ? `${shortDate(p)}, ${clockText(p)}` : null].filter(present).join(' · ')));
+    r.append(i, m);
+    if (!rec) r.append(el('span', 'row-meta warn', 'Review'), icon('chev', 'chev'));
+    g.append(r);
+  });
+  return [sectionLabel('Waiting for Approval'), g];
+}
+function clockText(p) { return p && p.h !== null ? clock(p) : ''; }
+
+let reviewStamp = '';
+function renderReview(id, force) {
+  const v = state.drafts.find((x) => x.id === id);
+  const stamp = v ? `${v.id}|${v.status}` : `gone|${id}|${state.visits.some((x) => x.id === id)}`;
+  if (stamp === reviewStamp && !force) return;   // keep the clinician's edits while the app polls
+  reviewStamp = stamp;
+  const box = $('review');
+  if (!v) {
+    const g = el('div', 'group'); g.style.marginTop = '14px';
+    const done = state.visits.find((x) => x.id === id);
+    g.append(emptyBox(done ? 'Already approved' : 'Visit note not found', done ? 'This visit is in the After Visit Summary.' : 'It may still be loading.'));
+    if (done) { const a = link('Open After Visit Summary', '#visit/' + encodeURIComponent(id), 'btn btn-primary btn-sm'); a.style.margin = '0 14px 14px'; g.append(a); }
+    box.replaceChildren(g);
+    return;
+  }
+  const p = parseTs(v.ts);
+  const head = el('div', 'group');
+  const hr = el('div', 'avs-head');
+  hr.append(dateTile(p));
+  const hm = el('div', 'row-main');
+  hm.append(el('span', 'row-title', v.status === 'recording' ? 'Recording visit' : 'Visit Note · Draft'));
+  const end = parseTs(v.end);
+  hm.append(el('span', 'row-sub', [v.clinician, v.specialty].filter(present).join(', ') || 'Clinician not stated'));
+  hm.append(el('span', 'row-meta', [fullWhen(p), end ? `to ${clockText(end)}` : null].filter(Boolean).join(' ')));
+  hr.append(hm);
+  head.append(hr);
+  if (v.status === 'recording') {
+    const g = el('div', 'group');
+    g.append(emptyBox('The band is recording this visit', 'When the visit ends, say “the meeting is done”. The draft note appears here for review.'));
+    box.replaceChildren(head, g);
+    return;
+  }
+
+  const n = v.note || {};
+  const fields = {};
+  const lines = (a) => (a || []).filter(present).join('\n');
+  const input = (key, value, multi, ph) => {
+    const f = el(multi ? 'textarea' : 'input', 'note-in');
+    f.value = value == null ? '' : String(value);
+    if (ph) f.placeholder = ph;
+    if (multi) { f.rows = Math.max(2, Math.ceil(f.value.length / 80) + (f.value.match(/\n/g) || []).length); }
+    fields[key] = f;
+    return f;
+  };
+  const table = el('table', 'note-table');
+  const row = (label, ...cells) => { const tr = el('tr'); const th = el('th', null, label); th.scope = 'row'; const td = el('td'); td.append(...cells); tr.append(th, td); table.append(tr); };
+  row('Clinician', input('clinician', v.clinician, false, 'Name'));
+  row('Specialty', input('specialty', v.specialty, false, 'Not stated'));
+  row('Chief Complaint', input('reason', v.reason, false, 'Not stated'));
+  row('Subjective', input('subjective', n.subjective, true, 'History of present illness'));
+  row('Objective', input('objective', n.objective, true, 'Exam, vitals, results'));
+  row('Assessment', input('assessment', n.assessment, true, 'Not stated in the visit'));
+  row('Plan', input('plan', n.plan, true, 'Not stated'));
+
+  // medications: one row each, added as unreviewed prescriptions for the patient to confirm
+  const medBody = el('tbody');
+  const medRowEl = (m = {}) => {
+    const tr = el('tr');
+    ['name', 'dose', 'frequency', 'times'].forEach((k) => {
+      const td = el('td'); const f = el('input', 'note-in'); f.dataset.k = k;
+      f.value = k === 'times' ? (m.times || []).join(', ') : (m[k] || '');
+      f.placeholder = { name: 'Medication', dose: 'Dose', frequency: 'How often', times: 'e.g. 08:00' }[k];
+      f.setAttribute('aria-label', f.placeholder);
+      td.append(f); tr.append(td);
+    });
+    medBody.append(tr);
+  };
+  (v.medications || []).forEach(medRowEl);
+  const medTable = el('table', 'note-meds');
+  const mh = el('tr'); ['Name', 'Dose', 'How often', 'Times'].forEach((t) => mh.append(el('th', null, t)));
+  const thead = el('thead'); thead.append(mh);
+  medTable.append(thead, medBody);
+  const addMed = button('Add medication', 'btn-plain btn-sm', () => medRowEl());
+  row('Medications', medTable, addMed);
+  row('Tests Ordered', input('tests', lines(v.tests_ordered), true, 'One per line'));
+  const fu = el('div', 'note-fu');
+  const fuDate = el('input', 'note-in'); fuDate.type = 'date'; fuDate.setAttribute('aria-label', 'Follow-up date');
+  if (present(v.follow_up)) fuDate.value = String(v.follow_up).slice(0, 10);
+  fields.followDate = fuDate;
+  fu.append(fuDate);
+  if (present(v.follow_up_text)) fu.append(el('span', 'note-said', `Said: “${v.follow_up_text}”`));
+  row('Follow-up', fu);
+  row('Patient Instructions', input('instructions', lines(v.instructions), true, 'One per line'));
+  row('Summary for Patient', input('summary', v.summary, true, 'Plain language'));
+  const tg = el('div', 'group note-wrap'); tg.append(table);
+
+  const out = [head, sectionLabel('Visit Note'), tg];
+  if (present(v.transcript)) {
+    const d = el('details', 'group transcript');
+    d.append(el('summary', null, 'Transcript of the visit'), el('p', 'prose', v.transcript));
+    out.push(d);
+  }
+  const acts = el('div', 'note-actions');
+  const ok = button('Approve and Save', 'btn-primary', null, 'check');
+  ok.addEventListener('click', () => approveVisit(v, fields, medBody, ok));
+  acts.append(ok);
+  out.push(acts, el('p', 'footnote', `Drafted by ${v.note_model || 'a local model'} from the recording. Check each line against the transcript. Nothing is added to the patient's record until you approve.`));
+  box.replaceChildren(...out);
+}
+
+async function approveVisit(v, f, medBody, b) {
+  b.disabled = true;
+  const val = (k) => f[k].value.trim() || null;
+  const list = (k) => f[k].value.split('\n').map((x) => x.trim()).filter(Boolean);
+  const clinician = val('clinician');
+  const meds = [...medBody.querySelectorAll('tr')].map((tr) => {
+    const m = {}; tr.querySelectorAll('input').forEach((i) => { m[i.dataset.k] = i.value.trim(); });
+    return m;
+  }).filter((m) => m.name);
+  try {
+    // prescriptions first: if one fails, the draft stays as it is
+    const ids = [];
+    for (const [i, m] of meds.entries()) {
+      const id = `med-${Date.now()}-${i}`;
+      await post('/MedicationRequest', {
+        schema_version: '0.1', id, ts: localIso(), name: m.name, dose: m.dose || null,
+        times: m.times.split(/[ ,]+/).filter((t) => /^\d{1,2}:\d{2}$/.test(t)), instructions: m.frequency || null,
+        prescribed_by: clinician, visit_id: v.id, start: localIso().slice(0, 10), end: null, confirmed_at: null, confirmed_by: null,
+      });
+      ids.push(id);
+    }
+    await post('/Encounter', {
+      ...v, status: 'final', clinician, specialty: val('specialty'), reason: val('reason'),
+      note: { subjective: val('subjective'), objective: val('objective'), assessment: val('assessment'), plan: val('plan') },
+      medications: meds, medication_ids: ids, tests_ordered: list('tests'), instructions: list('instructions'),
+      follow_up: f.followDate.value || null, summary: val('summary'),
+      approved_at: localIso(), approved_by: clinician || 'Clinician',
+    });
+    await refresh();
+    location.hash = '#visit/' + encodeURIComponent(v.id);
+  } catch (err) {
+    b.disabled = false; b.lastChild.textContent = 'Could not save. Try again';
+  }
 }
 
 function renderMeds() {
@@ -816,7 +987,7 @@ function renderStatus() {
 
 let lastKey = '';
 function renderAll(force) {
-  const key = JSON.stringify([state.events, state.visits, state.meds, state.doses, state.msgs, state.locked, state.filter, state.visitsTab, location.hash]);
+  const key = JSON.stringify([state.events, state.visits, state.drafts, state.meds, state.doses, state.msgs, state.locked, state.filter, state.visitsTab, location.hash]);
   if (force || key !== lastKey) {
     lastKey = key;
     const sorted = [...state.events].sort(newestFirst);
@@ -825,6 +996,7 @@ function renderAll(force) {
     renderVisits();
     const [r, id] = location.hash.slice(1).split('/');
     if (r === 'visit') renderVisit(decodeURIComponent(id || ''));
+    if (r === 'review') renderReview(decodeURIComponent(id || ''), force);
     renderMeds();
     renderSummary();
     if (SHOW_MESSAGES) renderThread();
@@ -913,6 +1085,7 @@ function renderDash(sorted) {
   const todo = $('dc-todo');
   todo.replaceChildren(dcardHead('To Do'));
   const items = [];
+  state.drafts.filter((v) => v.status === 'draft').forEach((v) => items.push(['doc', 'Approve visit note', '', '#review/' + encodeURIComponent(v.id)]));
   state.meds.filter((m) => !m.confirmed_at).forEach((m) => items.push(['med', `Review ${m.name || 'medication'}`, '', '#medications']));
   const lv = pastVisits()[0];
   if (lv && dayDiff(parseTs(lv.ts) || { y: 1970, mo: 1, d: 1 }) <= 7) items.push(['doc', 'After Visit Summary', '', '#visit/' + encodeURIComponent(lv.id)]);
