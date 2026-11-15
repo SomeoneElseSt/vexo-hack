@@ -129,12 +129,18 @@ def line_api(entry: dict) -> str:
     payload = entry.get("payload")
     if not payload:
         return head
-    # what was actually sent: the fields a reader cares about, not the raw blob
-    keep = ("ts", "source", "verbatim_quote", "body_location", "quality",
-            "severity", "activity", "extract_model")
-    shown = {k: payload[k] for k in keep if payload.get(k) is not None}
-    body = json.dumps(shown, ensure_ascii=False)
-    return head + "\n" + " " * 25 + paint(body, DIM)
+    # on camera, a record reads better as labelled fields than as JSON
+    labels = (("body_location", "body"), ("quality", "quality"),
+              ("severity", "severity"), ("activity", "activity"),
+              ("extract_model", "model"), ("ts", "at"))
+    fields = [f"{name} {payload[key]}" for key, name in labels if payload.get(key)]
+    quote = payload.get("verbatim_quote")
+    lines = [head]
+    if quote:
+        lines.append(" " * 25 + paint(f'"{quote}"', DIM))
+    if fields:
+        lines.append(" " * 25 + paint("  ·  ".join(fields), CYAN))
+    return "\n".join(lines)
 
 
 def line_model(entry: dict) -> str:
