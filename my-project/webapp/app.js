@@ -22,7 +22,7 @@ const ROUTES = {
   visit:       { tab: 'visits', title: 'After Visit Summary', back: ['#visits', 'Visits'] },
   medications: { tab: 'medications', title: 'Medications' },
   summary:     { tab: 'summary', title: 'Health Summary' },
-  share:       { tab: 'summary', title: 'Share My Record', back: ['#summary', 'Summary'] },
+  share:       { tab: 'summary', title: 'Export My Record', back: ['#summary', 'Summary'] },
   messages:    { tab: 'home', title: 'Messages', back: ['#home', 'Home'] },
 };
 
@@ -771,7 +771,7 @@ function renderSummary() {
   const sh = el('div', 'group');
   const a = el('a', 'row row-link'); a.href = '#share';
   const ai = el('span', 'row-ico'); ai.append(icon('share'));
-  const am = el('span', 'row-main'); am.append(el('span', 'row-title', 'Share My Record'), el('span', 'row-sub', 'FHIR, International Patient Summary, CSV'));
+  const am = el('span', 'row-main'); am.append(el('span', 'row-title', 'Export My Record'), el('span', 'row-sub', 'FHIR, International Patient Summary, CSV'));
   a.append(ai, am, icon('chev', 'chev'));
   sh.append(a);
   out.push(el('div', null), sh);

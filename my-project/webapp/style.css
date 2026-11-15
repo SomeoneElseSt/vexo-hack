@@ -815,3 +815,17 @@ body.desktop .grab { display: none; }
 .side a[aria-current="page"]:hover { background: rgba(255, 255, 255, .1); }
 .side a[aria-current="page"]::before { content: ""; left: -10px; top: 12px; bottom: 12px; width: 4px; border-radius: 0 4px 4px 0; background: #fff; }
 .side a[aria-current="page"] svg { stroke-width: 2.2; }
+
+/* calendar hidden: a calendar icon in the top right brings it back */
+.rail-toggle .rt-show { display: none; }
+.desk.rail-off .rail-toggle { top: 18px; right: 24px; transform: none; width: 44px; height: 44px; color: var(--tint); }
+.desk.rail-off .rail-toggle .rt-hide { display: none; }
+.desk.rail-off .rail-toggle .rt-show { display: block; width: 22px; height: 22px; transform: none; }
+@media (max-width: 1280px) {
+  .desk.rail-off .dash-strip { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .desk.rail-off .strip-item:nth-child(4) { border-left: 1px solid #dfe5e9; padding-left: 18px; }
+  .desk.rail-off .strip-item:nth-child(n+4) { border-top: 0; }
+}
+.desk.rail-off .rail-toggle { background: none; border: 0; box-shadow: none; border-radius: 8px; }
+.desk.rail-off .rail-toggle:hover { background: rgba(15, 95, 107, .08); }
+.desk.rail-off .rail-toggle .rt-show { width: 24px; height: 24px; }

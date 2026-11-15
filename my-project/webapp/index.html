@@ -35,6 +35,7 @@
     <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
     <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 10h.01M10.3 10h.01M13.7 10h.01M17 10h.01M8 14h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3.5 10h17M8 3v4M16 3v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
     <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-back" viewBox="0 0 24 24"><path d="m14.5 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
@@ -56,7 +57,7 @@
       <a href="#medications" data-tab="medications"><svg><use href="#i-med"/></svg><span>Medications</span><span class="side-badge" id="side-med-badge" hidden></span></a>
       <a href="#summary" data-tab="summary"><svg><use href="#i-summary"/></svg><span>Summary</span></a>
     </nav>
-    <a class="side-foot" href="#share" data-tab="share"><svg><use href="#i-share"/></svg><span>Share</span></a>
+    <a class="side-foot" href="#share" data-tab="share"><svg><use href="#i-share"/></svg><span>Export</span></a>
   </aside>
 
   <div class="desk-center">
@@ -82,7 +83,7 @@
     </div>
   </div>
 
-  <button class="rail-toggle" id="rail-toggle" type="button" aria-controls="rail" aria-expanded="true" aria-label="Hide calendar" title="Hide calendar"><svg><use href="#i-chev"/></svg></button>
+  <button class="rail-toggle" id="rail-toggle" type="button" aria-controls="rail" aria-expanded="true" aria-label="Hide calendar" title="Hide calendar"><svg class="rt-hide"><use href="#i-chev"/></svg><svg class="rt-show"><use href="#i-cal"/></svg></button>
   <aside class="rail" id="rail" aria-label="Calendar and care team">
     <div class="cal" id="cal"></div>
     <div id="cal-day"></div>
@@ -128,7 +129,7 @@
             <a class="tile" href="#medications" data-hue="amber"><span class="tile-ico"><svg><use href="#i-med"/></svg></span><span>Medications</span></a>
             <a class="tile" href="#summary" data-hue="violet"><span class="tile-ico"><svg><use href="#i-summary"/></svg></span><span>Health Summary</span></a>
             <a class="tile" href="#messages" data-hue="green" data-msg><span class="tile-ico"><svg><use href="#i-msg"/></svg></span><span>Messages</span></a>
-            <a class="tile" href="#share" data-hue="green" data-nomsg><span class="tile-ico"><svg><use href="#i-share"/></svg></span><span>Share My Record</span></a>
+            <a class="tile" href="#share" data-hue="green" data-nomsg><span class="tile-ico"><svg><use href="#i-share"/></svg></span><span>Export My Record</span></a>
           </nav>
 
           <div class="glance" id="home-glance"></div>
@@ -214,7 +215,7 @@
       </section>
 
       <!-- ===== SHARE ===== -->
-      <section class="view" id="view-share" aria-label="Share My Record" hidden>
+      <section class="view" id="view-share" aria-label="Export My Record" hidden>
         <div id="share-flow"></div>
         <p class="footnote">Records are encrypted with a key held on your own device.</p>
 
