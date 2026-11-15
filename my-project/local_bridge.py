@@ -436,8 +436,13 @@ VISIT_START = ("i'm with the doctor", "i am with the doctor", "i'm with my docto
 # "finish" as "finishes" — the variants are what it actually outputs
 VISIT_END = ("meeting is done", "meeting is over", "visit is done", "visit is over",
              "appointment is done", "appointment is over", "end the visit",
-             "and the visit", "in the visit", "ending the visit", "finish the visit",
              "stop recording the visit")
+# whisper mishears "end the visit" as "and the visit", but those words also appear
+# in ordinary clinic talk ("anything else in the visit today?") — so only a short
+# turn counts as the command.
+VISIT_END_LOOSE = ("and the visit", "in the visit", "ending the visit", "finish the visit",
+                   "finishes the visit", "end of visit", "visit is finished")
+COMMAND_MAX_WORDS = 6
 VISIT = {"active": False, "id": None, "start": None, "turns": []}
 VISIT_LOCK = threading.Lock()
 
@@ -563,7 +568,9 @@ def route_turn(text: str, audio: bytes, pending: list) -> None:
         active = VISIT["active"]
         if active:
             VISIT["turns"].append(text)
-            ended = any(p in low for p in VISIT_END)
+            short = len(low.split()) <= COMMAND_MAX_WORDS
+            ended = (any(p in low for p in VISIT_END)
+                     or (short and any(p in low for p in VISIT_END_LOOSE)))
             if ended:
                 done = {**VISIT, "turns": list(VISIT["turns"])}
                 VISIT.update(active=False, id=None, start=None, turns=[])
