@@ -23,6 +23,7 @@ import base64
 import json
 import os
 import sys
+from collections import deque
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -105,6 +106,17 @@ If the patient did not say it, use null.
 """
 
 
+def parse_json_reply(content: str) -> dict:
+    """Read the model's JSON even when it wraps it in prose or markdown."""
+    text = (content or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError(f"no JSON object in reply: {text[:60]!r}")
+    return json.loads(text[start:end + 1])
+
+
 def transcribe(pcm: bytes) -> str:
     samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
     segments, _ = WHISPER.transcribe(samples, language="en")
@@ -121,14 +133,12 @@ def _ask(endpoint: str, model: str, quote: str) -> dict:
             {"role": "user", "content": quote},
         ],
         "format": "json", "temperature": 0, "stream": False,
+        "response_format": {"type": "json_object"},
     }
     r = requests.post(f"{endpoint}/chat/completions", json=payload, timeout=120)
     r.raise_for_status()
-    content = r.json()["choices"][0]["message"]["content"].strip()
-    if content.startswith("```"):          # models often fence JSON in markdown
-        content = content.strip("`")
-        content = content[content.find("{"):content.rfind("}") + 1]
-    parsed = json.loads(content)
+    content = r.json()["choices"][0]["message"]["content"]
+    parsed = parse_json_reply(content)
     log_stream("model", role="extract", model=model, endpoint=endpoint,
                seconds=round(time.time() - started, 2), text=quote[:60], ok=True)
     fields = {k: parsed.get(k) for k in ("body_location", "quality", "severity", "activity")}
@@ -264,8 +274,13 @@ def log_taken(quote: str) -> bool:
     return True
 
 
+VAD_FRAME = 512          # silero wants exactly 512 samples (32 ms) at 16 kHz
 SPEECH_RMS_FLOOR = 120    # never treat near-silence as speech
 SPEECH_FACTOR = 2.5       # speech is this much louder than the room
+VAD_THRESHOLD = 0.5       # silero p(speech) above this means speech
+VAD_HANGOVER_MS = 300     # keep speech alive this long after the last voiced frame
+FLOOR_PERCENTILE = 20    # the room is the quiet fifth of recent levels, not the average
+FLOOR_WINDOW = 250       # ~5 s of 20 ms frames
 SILENCE_MS = 1200         # an utterance ends after this much quiet
 MIN_SPEECH_MS = 700       # ignore blips shorter than this
 MAX_UTTERANCE_MS = 20000   # hard ceiling so a noisy room cannot grow forever
@@ -317,7 +332,7 @@ def _keyword_verdict(quote: str) -> dict:
     dose = parse_taken(quote) is not None
     words = ("pain", "pressure", "dizzy", "sharp", "ache", "nausea", "tired", "chest",
              "head", "stomach", "burning", "tight", "cramp")
-    log = dose or any(w in quote.lower() for w in words)
+    log = dose or any(w in quote.lower().split() for w in words)
     return {"log": log, "kind": "dose" if dose else ("symptom" if log else "other"),
             "reason": "keyword fallback"}
 
@@ -336,24 +351,22 @@ def decide(quote: str) -> dict:
         "messages": [{"role": "system", "content": DECISION_PROMPT},
                      {"role": "user", "content": quote}],
         "format": "json", "temperature": 0, "stream": False,
+        "response_format": {"type": "json_object"},
     }
     for attempt in range(1, GATE_RETRIES + 1):
         started = time.time()
         try:
             r = requests.post(f"{DECISION_URL}/chat/completions", json=payload, timeout=60)
             r.raise_for_status()
-            content = r.json()["choices"][0]["message"]["content"].strip()
-            if content.startswith("```"):
-                content = content.strip("`")
-                content = content[content.find("{"):content.rfind("}") + 1]
-            answer = json.loads(content)
+            content = r.json()["choices"][0]["message"]["content"]
+            answer = parse_json_reply(content)
             if "log" not in answer:
                 raise ValueError("no 'log' field")
             kind = answer.get("kind") or "other"
             if kind not in ("symptom", "dose", "message", "visit", "other"):
                 kind = "other"
-            verdict = {"log": bool(answer.get("log")), "kind": kind,
-                       "reason": answer.get("reason") or ""}
+            verdict = {"log": bool(answer.get("log")) and kind != "other",
+                       "kind": kind, "reason": answer.get("reason") or ""}
             log_stream("model", role="gate", model=DECISION_MODEL,
                        seconds=round(time.time() - started, 2),
                        attempt=attempt, ok=True)
@@ -370,6 +383,31 @@ def decide(quote: str) -> dict:
     return verdict
 
 
+_VAD = None
+
+
+def vad_model():
+    """The trained speech detector (silero), loaded once."""
+    global _VAD
+    if _VAD is None:
+        import torch  # noqa: F401  — silero needs torch present
+        from silero_vad import load_silero_vad
+        _VAD = load_silero_vad()
+    return _VAD
+
+
+def speech_probability(pcm: bytes) -> float:
+    """p(speech) for one 20 ms frame — silero needs exactly 512 samples at 16 kHz."""
+    import numpy as np
+    import torch
+    frame = np.frombuffer(pcm[:1024], dtype=np.int16).astype(np.float32) / 32768.0
+    if len(frame) < VAD_FRAME:
+        frame = np.pad(frame, (0, VAD_FRAME - len(frame)))
+    with torch.no_grad():
+        prob = float(vad_model()(torch.from_numpy(frame).reshape(1, -1), 16000).item())
+    return 0.0 if prob != prob else prob   # the model returns nan on a silent frame
+
+
 async def band_loop() -> None:
     from vexo_open import Band as AsyncBand
     from vexo_open.audio import PcmDecoder
@@ -381,37 +419,53 @@ async def band_loop() -> None:
     pre_roll = bytearray()     # a little audio before speech starts
     quiet_chunks = 0
     speech_chunks = 0
-
-    floor = 200.0      # running noise estimate, adapts to the room
+    hangover = 0               # frames left before a voiced run really ended
+    levels: deque[int] = deque(maxlen=FLOOR_WINDOW)   # recent loudness, for the room floor
+    vframe = bytearray()       # leftover bytes that don't fill a full VAD frame yet
+    silence = bytearray()      # the tail of the utterance, kept while deciding
 
     def on_audio(packet) -> None:
-        nonlocal quiet_chunks, speech_chunks, floor
+        nonlocal quiet_chunks, speech_chunks, hangover
         pcm = decoder.feed(packet)
         if not pcm:
             return
         level = rms(pcm)
-        # whisper of the room: drift slowly up on quiet, down on loud
-        floor = floor * 0.995 + min(level, floor * 1.5) * 0.005
+        levels.append(level)
+        # the room is the quiet part of the recent past — a fan or music can't inflate it
+        ordered = sorted(levels)
+        floor = ordered[len(ordered) * FLOOR_PERCENTILE // 100]
         threshold = max(SPEECH_RMS_FLOOR, floor * SPEECH_FACTOR)
-        loud = level >= threshold
-        if loud and not speech_chunks:
-            log_stream("speech", rms=level, floor=round(floor),
+        # a full VAD frame costs a lot less than it is worth: only run it when it could matter
+        vframe.extend(pcm)
+        if len(vframe) < 1024:
+            return
+        frame, vframe[:] = bytes(vframe[:1024]), vframe[1024:]
+        loud = rms(frame) >= threshold
+        prob = speech_probability(frame) if loud or speech_chunks else 0.0
+        voiced = loud and prob >= VAD_THRESHOLD
+        if voiced and not speech_chunks:
+            log_stream("speech", rms=level, prob=round(prob, 2), floor=floor,
                        threshold=round(threshold), started=True)
+        elif voiced:
+            hangover = VAD_HANGOVER_MS // CHUNK_MS
+        elif hangover:
+            hangover -= 1
+            voiced = True   # bridge a short pause inside one sentence
         if OPTIONS.verbose_vad:
-            log_stream("vad", rms=level, floor=round(floor), threshold=round(threshold),
-                       speech=loud)
-        if loud:
+            log_stream("vad", rms=level, prob=round(prob, 2), floor=floor,
+                       threshold=round(threshold), speech=voiced)
+        if voiced:
             speech.extend(pre_roll)
             pre_roll.clear()
-            speech.extend(pcm)
+            speech.extend(frame)
             quiet_chunks = 0
             speech_chunks += 1
             return
         if speech_chunks:
-            speech.extend(pcm)
+            speech.extend(frame)
             quiet_chunks += 1
             return
-        pre_roll.extend(pcm)
+        pre_roll.extend(frame)
         if len(pre_roll) > SAMPLES_PER_CHUNK * 2 * 25:
             del pre_roll[:len(pre_roll) - SAMPLES_PER_CHUNK * 2 * 25]
 
