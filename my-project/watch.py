@@ -68,8 +68,40 @@ def line_api(entry: dict) -> str:
             f"{entry.get('status')}{note}  ({who})")
 
 
+def line_model(entry: dict) -> str:
+    ok = "ok" if entry.get("ok") else f"FAILED {entry.get('error', '')[:40]}"
+    return (f"model {entry.get('role'):<8} {entry.get('model'):<12} "
+            f"{entry.get('seconds')}s attempt={entry.get('attempt', 1)} {ok} "
+            f"{entry.get('text', '')[:34]!r}")
+
+
+def line_band_event(entry: dict) -> str:
+    return f"band  event {entry.get('event'):<10} {entry.get('detail', '')}"
+
+
+def line_utterance(entry: dict) -> str:
+    return f"voc   utterance {entry.get('audio_s')}s ({entry.get('speech_ms')} ms speech)"
+
+
+def line_vad(entry: dict) -> str:
+    return (f"vad   rms={entry.get('rms'):<5} floor={entry.get('floor'):<4} "
+            f"thr={entry.get('threshold'):<4} speech={entry.get('speech')}")
+
+
+def line_vad_drop(entry: dict) -> str:
+    return f"voc   dropped {entry.get('reason')} ({entry.get('audio_s')}s)"
+
+
+def line_generic(entry: dict) -> str:
+    fields = {k: v for k, v in entry.items() if k not in ("t", "type")}
+    text = ", ".join(f"{k}={v}" for k, v in fields.items())
+    return f"{entry.get('type'):<10} {text[:90]}"
+
+
 RENDER = {"gate": line_gate, "transcript": line_transcript,
-          "route": line_route, "api": line_api}
+          "route": line_route, "api": line_api, "model": line_model,
+          "band_event": line_band_event, "utterance": line_utterance,
+          "vad": line_vad, "vad_drop": line_vad_drop}
 
 
 def read_entries(stream_log: Path, api_log: Path) -> list[dict]:
@@ -123,9 +155,8 @@ def follow(path: Path, offset: int) -> int:
                 entry = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            render = RENDER.get(entry.get("type"))
-            if render:
-                print("  " + render(entry), flush=True)
+            render = RENDER.get(entry.get("type")) or line_generic
+            print("  " + render(entry), flush=True)
         return fh.tell()
 
 

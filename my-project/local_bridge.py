@@ -113,6 +113,7 @@ def transcribe(pcm: bytes) -> str:
 
 def _ask(endpoint: str, model: str, quote: str) -> dict:
     """One extraction call. Raises on any failure so the caller can fall back."""
+    started = time.time()
     payload = {
         "model": model,
         "messages": [
@@ -128,6 +129,8 @@ def _ask(endpoint: str, model: str, quote: str) -> dict:
         content = content.strip("`")
         content = content[content.find("{"):content.rfind("}") + 1]
     parsed = json.loads(content)
+    log_stream("model", role="extract", model=model, endpoint=endpoint,
+               seconds=round(time.time() - started, 2), text=quote[:60], ok=True)
     fields = {k: parsed.get(k) for k in ("body_location", "quality", "severity", "activity")}
     # severity is only kept when the patient actually said a number
     if fields["severity"] is not None and not any(
@@ -155,7 +158,12 @@ STREAM_LOG = os.environ.get("STREAM_LOG", "/tmp/stream.jsonl")
 
 
 def log_stream(entry_type: str, **fields) -> None:
-    """Append one literal line to the demo stream: transcripts, labels, API calls."""
+    """Append one literal line to the demo stream.
+
+    Everything the pipeline sees goes here — audio levels, band events,
+    transcripts, labels, routes, model calls (with latency), API calls, errors —
+    so the logger shows the whole system, not just the decisions.
+    """
     line = json.dumps({"t": time.strftime("%H:%M:%S"), "type": entry_type, **fields})
     try:
         with open(STREAM_LOG, "a") as fh:
@@ -330,6 +338,7 @@ def decide(quote: str) -> dict:
         "format": "json", "temperature": 0, "stream": False,
     }
     for attempt in range(1, GATE_RETRIES + 1):
+        started = time.time()
         try:
             r = requests.post(f"{DECISION_URL}/chat/completions", json=payload, timeout=60)
             r.raise_for_status()
@@ -345,10 +354,15 @@ def decide(quote: str) -> dict:
                 kind = "other"
             verdict = {"log": bool(answer.get("log")), "kind": kind,
                        "reason": answer.get("reason") or ""}
+            log_stream("model", role="gate", model=DECISION_MODEL,
+                       seconds=round(time.time() - started, 2),
+                       attempt=attempt, ok=True)
             log_stream("gate", text=quote, **verdict)
             return verdict
         except (json.JSONDecodeError, ValueError, requests.RequestException, KeyError) as exc:
-            log_stream("gate_error", attempt=attempt, error=f"{type(exc).__name__}: {exc}")
+            log_stream("model", role="gate", model=DECISION_MODEL,
+                       seconds=round(time.time() - started, 2),
+                       attempt=attempt, ok=False, error=f"{type(exc).__name__}: {exc}")
             print(f"gate attempt {attempt}/{GATE_RETRIES} failed: "
                   f"{type(exc).__name__}: {exc}", flush=True)
     verdict = _keyword_verdict(quote)
@@ -380,6 +394,9 @@ async def band_loop() -> None:
         floor = floor * 0.995 + min(level, floor * 1.5) * 0.005
         threshold = max(SPEECH_RMS_FLOOR, floor * SPEECH_FACTOR)
         loud = level >= threshold
+        if OPTIONS.verbose_vad:
+            log_stream("vad", rms=level, floor=round(floor), threshold=round(threshold),
+                       speech=loud)
         if loud:
             speech.extend(pre_roll)
             pre_roll.clear()
@@ -396,6 +413,9 @@ async def band_loop() -> None:
             del pre_roll[:len(pre_roll) - SAMPLES_PER_CHUNK * 2 * 25]
 
     band.on("audio", on_audio)
+    for gesture in ("tap", "double-tap", "event"):
+        band.on(gesture, lambda e, g=gesture: log_stream(
+            "band_event", event=g, detail=str(getattr(e, "kind", "") or "")))
 
     async def process(utterance: bytes) -> None:
         quote = await asyncio.to_thread(transcribe, utterance)
@@ -447,7 +467,11 @@ async def band_loop() -> None:
             speech_chunks = 0
             quiet_chunks = 0
             if len(utterance) < MIN_SPEECH_MS * 32:
+                log_stream("vad_drop", reason="too short",
+                           audio_s=round(len(utterance) / 2 / 16000, 2))
                 continue
+            log_stream("utterance", audio_s=round(len(utterance) / 2 / 16000, 2),
+                       speech_ms=spoken)
             # the mic owns the light, so stop it briefly to show red / green
             await band.configure(audio=False)
             await set_led(band, LED_PROCESSING)
@@ -480,6 +504,8 @@ def main() -> None:
                         help="secondary model name for the fallback endpoint")
     parser.add_argument("--whisper", default="/tmp/faster-whisper-small")
     parser.add_argument("--allow", nargs="*", default=["http://localhost:8766"])
+    parser.add_argument("--verbose-vad", action="store_true",
+                        help="also log every 20 ms audio frame (level, noise floor, speech?)")
     OPTIONS = parser.parse_args()
 
     SECRET = dc.load_or_create_secret()
