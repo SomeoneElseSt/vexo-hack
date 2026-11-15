@@ -28,6 +28,15 @@ KINDS = ("Observation", "Encounter", "MedicationRequest",
 SANDBOX_ID = "b4b3521b-84a5-40e8-8968-a58c36aa4fc2"
 
 
+def local_counts(base: str, headers: dict) -> dict[str, int]:
+    """Cheap change check: the record count per kind, so a quiet vault costs nothing."""
+    out = {}
+    for kind in KINDS:
+        r = requests.get(f"{base}/{kind}", headers=headers, timeout=30)
+        out[kind] = len(r.json()) if r.status_code == 200 else 0
+    return out
+
+
 def local_records(base: str) -> dict[str, list[dict]]:
     """Everything the device can read from the local server."""
     secret = dc.load_or_create_secret()
@@ -63,7 +72,7 @@ def vm_ids(session: requests.Session, host: str, headers: dict) -> dict[str, set
     return out
 
 
-SYNC_INTERVAL = 3
+SYNC_INTERVAL = 1
 
 
 def main() -> None:
@@ -75,21 +84,31 @@ def main() -> None:
 
     if args.watch:
         import time
+        session = host = None
+        signed_at = 0.0
         while True:
             try:
-                sync_once(args.local)
+                # the signed URL lasts an hour: refresh it every 10 min, not every tick
+                if session is None or time.time() - signed_at > 600:
+                    session, host = vm_session()
+                    signed_at = time.time()
+                sync_once(args.local, session, host)
             except Exception as exc:
                 print(f"sync failed: {type(exc).__name__}: {exc}")
+                session = host = None   # next tick re-signs
             time.sleep(SYNC_INTERVAL)
+        return
     sync_once(args.local)
 
 
-def sync_once(local: str) -> None:
+def sync_once(local: str, session: requests.Session | None = None,
+              host: str | None = None) -> None:
 
     secret = dc.load_or_create_secret()
     headers = {"X-Device-Auth": dc.auth_token(secret)}
     records = local_records(local)
-    session, host = vm_session()
+    if session is None or host is None:
+        session, host = vm_session()
     seen = vm_ids(session, host, headers)
 
     copied = 0
