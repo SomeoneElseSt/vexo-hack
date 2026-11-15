@@ -829,3 +829,38 @@ body.desktop .grab { display: none; }
 .desk.rail-off .rail-toggle { background: none; border: 0; box-shadow: none; border-radius: 8px; }
 .desk.rail-off .rail-toggle:hover { background: rgba(15, 95, 107, .08); }
 .desk.rail-off .rail-toggle .rt-show { width: 24px; height: 24px; }
+
+/* ===== clinician review of a recorded visit ===== */
+.note-wrap { overflow: hidden; }
+.note-table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.note-table > tr > th, .note-table > tbody > tr > th {
+  width: 168px; padding: 12px 14px; text-align: left; vertical-align: top;
+  font-size: 13px; font-weight: 650; color: var(--ink-2); background: #f7f9fa;
+}
+.note-table > tr > td, .note-table > tbody > tr > td { padding: 6px 10px; vertical-align: top; }
+.note-table > tr + tr > *, .note-table > tbody > tr + tr > * { border-top: .5px solid var(--sep); }
+.note-in {
+  width: 100%; border: 1px solid transparent; border-radius: 6px; background: none; padding: 6px 6px;
+  font: inherit; font-size: 15px; line-height: 1.45; color: var(--ink); resize: vertical;
+}
+.note-in:hover { border-color: var(--sep); }
+.note-in:focus { outline: none; border-color: var(--tint); background: #fff; box-shadow: 0 0 0 3px rgba(11, 110, 124, .12); }
+.note-in::placeholder { color: var(--ink-3); }
+.note-meds { width: 100%; border-collapse: collapse; }
+.note-meds th { padding: 6px 6px 2px; text-align: left; font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.note-meds td { padding: 0 2px; }
+.note-meds tbody tr + tr td { border-top: .5px solid var(--sep); }
+.note-fu { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.note-fu input[type="date"] { width: auto; }
+.note-said { font-size: 13.5px; color: var(--ink-2); }
+.transcript { margin-top: 14px; }
+.transcript summary { padding: 12px 14px; font-size: 15px; font-weight: 600; cursor: pointer; color: var(--tint); }
+.transcript .prose { white-space: pre-line; padding-top: 0; color: var(--ink-2); }
+.note-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.note-actions .btn { height: 44px; padding: 0 20px; font-size: 15.5px; border-radius: 10px; }
+.note-actions .btn svg { width: 18px; height: 18px; }
+@media (max-width: 640px) {
+  .note-table > tr > th, .note-table > tbody > tr > th { display: block; width: auto; padding: 10px 14px 0; background: none; border-top: .5px solid var(--sep); }
+  .note-table > tr > td, .note-table > tbody > tr > td { display: block; border-top: 0 !important; padding: 2px 8px 8px; }
+  .note-actions .btn { width: 100%; }
+}
