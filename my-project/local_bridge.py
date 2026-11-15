@@ -394,6 +394,9 @@ async def band_loop() -> None:
         floor = floor * 0.995 + min(level, floor * 1.5) * 0.005
         threshold = max(SPEECH_RMS_FLOOR, floor * SPEECH_FACTOR)
         loud = level >= threshold
+        if loud and not speech_chunks:
+            log_stream("speech", rms=level, floor=round(floor),
+                       threshold=round(threshold), started=True)
         if OPTIONS.verbose_vad:
             log_stream("vad", rms=level, floor=round(floor), threshold=round(threshold),
                        speech=loud)

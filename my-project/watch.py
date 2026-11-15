@@ -1,21 +1,24 @@
-"""Live demo logger in the aie-hack style: one line per decision, then a roster.
+"""Live demo logger — what the band heard, what the gate decided, where it went.
 
-Every line is a single decision the system made, in the form
-    <what> -> <decision>  (<why>)
-and at the end a roster summary is written to my-project/data/roster.json:
+One block per utterance, colour-coded, in the aie-hack style:
 
-    {"history": [{"type": "gate", "kind": "symptom", "decision": "log",
-                  "pass_rate": 0.83, "by_intent": {...}, "avg_seconds": 0.79,
-                  "at": "..."}],
-     "totals": {"transcripts": 12, "logged": 4, "dropped": 8, "api_calls": 9}}
+    ─ 16:01:16 ─────────────────────────────────────────────
+    ●  speech        rms=915 > thr=479 (floor 192) — the patient is talking
+    ♪  utterance     3.2s (3100 ms speech)
+    ¶  transcript    'sharp chest pain, six out of ten'
+    ✓  gate          log symptom → /Observation  (chest pain with a severity)
+    →  route         POST /Observation 201 evt-1789  (sealed, 210 B)
+
+and a roster at the end (Ctrl-C), also written to my-project/data/roster.json.
 
 Usage:
     .venv/bin/python my-project/watch.py               # follow the live streams
-    .venv/bin/python my-project/watch.py --summary     # print the roster only
+    .venv/bin/python my-project/watch.py --summary     # print the roster and exit
 """
 
 import argparse
 import json
+import re
 import time
 from collections import Counter
 from pathlib import Path
@@ -29,7 +32,26 @@ INTENTS = ("symptom", "dose", "message", "visit", "other")
 ROUTE = {"symptom": "/Observation", "dose": "/MedicationAdministration",
          "message": "/Communication", "visit": "/Communication"}
 
+# ── colour ────────────────────────────────────────────────────────────────
+RESET, DIM, BOLD = "\033[0m", "\033[2m", "\033[1m"
+RED, GREEN, YELLOW, BLUE, CYAN, MAGENTA = (
+    "\033[31m", "\033[32m", "\033[33m", "\033[34m", "\033[36m", "\033[35m")
 
+
+def paint(text: str, colour: str) -> str:
+    return f"{colour}{text}{RESET}"
+
+
+ANSI = re.compile(r"\033\[[0-9;]*m")
+
+
+def pad(text: str, width: int) -> str:
+    """Left-align in a visible-width column (colour codes don't count)."""
+    visible = len(ANSI.sub("", text))
+    return text + " " * max(width - visible, 0)
+
+
+# ── roster ────────────────────────────────────────────────────────────────
 def load_roster() -> dict:
     if ROSTER.exists():
         return json.loads(ROSTER.read_text())
@@ -42,68 +64,88 @@ def save_roster(roster: dict, totals: Counter) -> None:
     ROSTER.write_text(json.dumps(data, indent=1))
 
 
-def line_gate(entry: dict) -> str:
-    kind = entry.get("kind") or "other"
-    decision = "log" if entry.get("log") else "drop"
-    target = ROUTE.get(kind, "nothing") if entry.get("log") else "nothing"
-    why = entry.get("reason") or ""
-    return (f"gate  {decision:<4} {kind:<8} -> {target:<26} "
-            f"{entry.get('text', '')[:44]!r} ({why[:50]})")
-
-
-def line_transcript(entry: dict) -> str:
-    return (f"heard {entry.get('audio_s')}s rms={entry.get('rms')} -> "
-            f"{(entry.get('text') or '')[:70]!r}")
-
-
-def line_route(entry: dict) -> str:
-    return (f"route {entry.get('intent'):<8} -> {entry.get('path'):<26} "
-            f"{entry.get('text', '')[:44]!r}")
-
-
-def line_api(entry: dict) -> str:
-    who = entry.get("who") or "bridge"
-    note = f" {entry['id']}" if entry.get("id") else ""
-    return (f"api   {entry.get('method', 'GET'):<4} {entry.get('path'):<26} "
-            f"{entry.get('status')}{note}  ({who})")
-
-
-def line_model(entry: dict) -> str:
-    ok = "ok" if entry.get("ok") else f"FAILED {entry.get('error', '')[:40]}"
-    return (f"model {entry.get('role'):<8} {entry.get('model'):<12} "
-            f"{entry.get('seconds')}s attempt={entry.get('attempt', 1)} {ok} "
-            f"{entry.get('text', '')[:34]!r}")
-
-
-def line_band_event(entry: dict) -> str:
-    return f"band  event {entry.get('event'):<10} {entry.get('detail', '')}"
+# ── one pretty line per entry ─────────────────────────────────────────────
+def line_speech(entry: dict) -> str:
+    return (pad(paint("● speech", GREEN), 22)
+            + f"rms={entry.get('rms')} > thr={entry.get('threshold')} "
+              f"(floor {entry.get('floor')}) — the patient is talking")
 
 
 def line_utterance(entry: dict) -> str:
-    return f"voc   utterance {entry.get('audio_s')}s ({entry.get('speech_ms')} ms speech)"
-
-
-def line_vad(entry: dict) -> str:
-    return (f"vad   rms={entry.get('rms'):<5} floor={entry.get('floor'):<4} "
-            f"thr={entry.get('threshold'):<4} speech={entry.get('speech')}")
+    return (pad(paint("♪ utterance", BLUE), 22)
+            + f"{entry.get('audio_s')}s ({entry.get('speech_ms')} ms speech)")
 
 
 def line_vad_drop(entry: dict) -> str:
-    return f"voc   dropped {entry.get('reason')} ({entry.get('audio_s')}s)"
+    return (pad(paint("✗ dropped", RED), 22)
+            + f"{entry.get('reason')} — {entry.get('audio_s')}s was too brief to send")
+
+
+def line_transcript(entry: dict) -> str:
+    return (pad(paint("¶ transcript", CYAN), 22)
+            + f"{entry.get('text', '')!r}")
+
+
+def line_gate(entry: dict) -> str:
+    kind = entry.get("kind") or "other"
+    why = (entry.get("reason") or "")[:46]
+    if entry.get("log"):
+        target = ROUTE.get(kind, "nothing")
+        tag = paint(f"✓ gate  {kind:<8} → {target}", GREEN)
+    else:
+        tag = paint(f"· gate  {kind:<8} → nothing", YELLOW)
+    return pad(tag, 46) + " " + paint(f"({why})", DIM)
+
+
+def line_route(entry: dict) -> str:
+    return (pad(paint("→ route", MAGENTA), 22)
+            + f"{entry.get('path')}  {entry.get('text', '')[:44]!r}")
+
+
+def line_api(entry: dict) -> str:
+    status = entry.get("status") or 0
+    colour = GREEN if 200 <= status < 400 else RED
+    note = f" {entry['id']}" if entry.get("id") else ""
+    size = f"  ({entry['bytes']} B)" if entry.get("bytes") else ""
+    who = entry.get("who") or "bridge"
+    return (pad(paint("→ api", MAGENTA), 22)
+            + f"{entry.get('method', 'GET')} {entry.get('path')} "
+            + paint(f"{status}", colour) + f"{note}{size}  ({who})")
+
+
+def line_model(entry: dict) -> str:
+    ok = entry.get("ok")
+    tag = paint(f"◑ {entry.get('role', 'model')}", CYAN if ok else RED)
+    verdict = "ok" if ok else f"FAILED {(entry.get('error') or '')[:34]}"
+    return (pad(tag, 22)
+            + f"{entry.get('model')}  {entry.get('seconds')}s  "
+              f"attempt {entry.get('attempt', 1)}  {verdict}")
+
+
+def line_band_event(entry: dict) -> str:
+    return (pad(paint("◆ band", YELLOW), 22)
+            + f"{entry.get('event')} {entry.get('detail', '')}".strip())
 
 
 def line_generic(entry: dict) -> str:
     fields = {k: v for k, v in entry.items() if k not in ("t", "type")}
     text = ", ".join(f"{k}={v}" for k, v in fields.items())
-    return f"{entry.get('type'):<10} {text[:90]}"
+    return pad(paint(str(entry.get("type")), DIM), 22) + text[:90]
 
 
-RENDER = {"gate": line_gate, "transcript": line_transcript,
-          "route": line_route, "api": line_api, "model": line_model,
-          "band_event": line_band_event, "utterance": line_utterance,
-          "vad": line_vad, "vad_drop": line_vad_drop}
+RENDER = {
+    "speech": line_speech, "utterance": line_utterance, "vad_drop": line_vad_drop,
+    "transcript": line_transcript, "gate": line_gate, "route": line_route,
+    "api": line_api, "model": line_model, "band_event": line_band_event,
+}
 
 
+def separator(at: str) -> str:
+    rule = "─" * 56
+    return paint(f"─ {at} {rule}", DIM)
+
+
+# ── the streams ──────────────────────────────────────────────────────────
 def read_entries(stream_log: Path, api_log: Path) -> list[dict]:
     entries = []
     for path in (stream_log, api_log):
@@ -125,24 +167,35 @@ def summary(stream_log: Path, api_log: Path) -> None:
     by_intent = Counter(g.get("kind") or "other" for g in logged)
     transcripts = [e for e in entries if e.get("type") == "transcript"]
     api_calls = [e for e in entries if e.get("type") == "api"]
-    pass_rate = round(len(logged) / len(gates), 3) if gates else 0.0
+    models = [e for e in entries if e.get("type") == "model" and e.get("ok")]
+    failures = [e for e in entries if e.get("type") in ("vad_drop", "model")
+                and (e.get("type") == "vad_drop" or not e.get("ok"))]
+    pass_rate = round(len(logged) / len(gates), 3) if len(gates) else 0.0
+    avg_seconds = (round(sum(e.get("seconds") or 0 for e in models) / len(models), 2)
+                   if len(models) else 0.0)
 
     roster = load_roster()
     roster["history"].append({
-        "type": "gate", "kind": "all", "decision": "live",
-        "pass_rate": pass_rate,
+        "type": "all", "decision": "live", "pass_rate": pass_rate,
         "by_intent": {i: by_intent.get(i, 0) for i in INTENTS if by_intent.get(i)},
-        "avg_seconds": 0.0,
+        "avg_seconds": avg_seconds, "failures": len(failures),
         "at": time.strftime("%Y-%m-%d %H:%M:%S"),
     })
     totals = Counter(roster.get("totals") or {})
     totals.update({"transcripts": len(transcripts), "logged": len(logged),
                    "dropped": len(gates) - len(logged), "api_calls": len(api_calls)})
     save_roster(roster, totals)
-    print(f"gate: {len(gates)} decisions, {len(logged)} logged ({pass_rate:.0%}) "
-          f"{dict(by_intent)}")
-    print(f"band: {len(transcripts)} transcripts | api: {len(api_calls)} calls")
-    print(f"roster written to {ROSTER}")
+
+    print()
+    print(paint(f"all: {len(gates)} gate decisions, {len(logged)} logged "
+                f"({pass_rate:.0%}) {dict(by_intent)} | {len(transcripts)} transcripts | "
+                f"{len(api_calls)} api calls | {avg_seconds}s avg model | "
+                f"{len(failures)} failures", BOLD))
+    for failure in failures[-5:]:
+        kind = failure.get("type")
+        detail = (failure.get("reason") or failure.get("error") or "")[:70]
+        print("  " + paint(f"FAIL {kind} | {detail}", RED))
+    print(paint(f"roster written to {ROSTER}", DIM))
 
 
 def follow(path: Path, offset: int) -> int:
@@ -156,6 +209,8 @@ def follow(path: Path, offset: int) -> int:
             except json.JSONDecodeError:
                 continue
             render = RENDER.get(entry.get("type")) or line_generic
+            if entry.get("type") == "speech":
+                print(separator(entry.get("t", "")), flush=True)
             print("  " + render(entry), flush=True)
         return fh.tell()
 
@@ -172,7 +227,9 @@ def main() -> None:
         summary(stream_log, api_log)
         return
 
-    print(f"watching decisions\n  bridge: {stream_log}\n  server: {api_log}\n")
+    print(paint("watching the band", BOLD)
+          + paint(f"  ·  stream {stream_log}  ·  api {api_log}", DIM))
+    print()
     s_off = stream_log.stat().st_size if stream_log.exists() else 0
     a_off = api_log.stat().st_size if api_log.exists() else 0
     try:
@@ -181,7 +238,6 @@ def main() -> None:
             a_off = follow(api_log, a_off)
             time.sleep(0.3)
     except KeyboardInterrupt:
-        print()
         summary(stream_log, api_log)
     except BrokenPipeError:   # piped into head/tee and the reader went away
         pass
