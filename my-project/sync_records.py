@@ -63,14 +63,32 @@ def vm_ids(session: requests.Session, host: str, headers: dict) -> dict[str, set
     return out
 
 
+SYNC_INTERVAL = 3
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--local", default="http://localhost:8766")
+    parser.add_argument("--watch", action="store_true",
+                        help="keep syncing every few seconds (for the live demo)")
     args = parser.parse_args()
+
+    if args.watch:
+        import time
+        while True:
+            try:
+                sync_once(args.local)
+            except Exception as exc:
+                print(f"sync failed: {type(exc).__name__}: {exc}")
+            time.sleep(SYNC_INTERVAL)
+    sync_once(args.local)
+
+
+def sync_once(local: str) -> None:
 
     secret = dc.load_or_create_secret()
     headers = {"X-Device-Auth": dc.auth_token(secret)}
-    records = local_records(args.local)
+    records = local_records(local)
     session, host = vm_session()
     seen = vm_ids(session, host, headers)
 
@@ -88,7 +106,8 @@ def main() -> None:
                 copied += 1
             else:
                 print(f"failed {kind} {rid}: {r.status_code} {r.text[:80]}")
-    print(f"synced {copied} records to the VM vault")
+    if copied:
+        print(f"synced {copied} records to the VM vault")
 
 
 if __name__ == "__main__":
