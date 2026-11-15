@@ -288,6 +288,7 @@ BUFFER_SECONDS = 12       # rolling window: long enough for whole sentences
 PAUSE_SECONDS = 1.0      # this long without audio, the turn is over
 MIN_BUFFER_SECONDS = 0.8  # don't bother transcribing less than this
 REALTIME_TICK = 0.6      # how often we re-transcribe what is buffered
+GATE_WINDOW_SECONDS = 10  # Gemma sees everything said in the last 10 s, once per window
 SPEECH_RMS_FLOOR = 120    # below this a frame is just the room, not a voice
 MIN_WORDS = 3             # a 1-2 word fragment is not a report
 CHUNK_MS = 20             # the band sends 20 ms Opus packets
@@ -439,8 +440,34 @@ def common_prefix_words(a: str, b: str) -> str:
     return " ".join(agreed)
 
 
+async def gate_worker(pending: list, process) -> None:
+    """Every GATE_WINDOW_SECONDS, hand Gemma the whole window — never fragments.
+
+    The turns that finished in the last 10 s are joined into one text and
+    judged once, so a message split across turns ("my chest... hurts a lot")
+    is read whole instead of as two half-sentences.
+    """
+    while True:
+        await asyncio.sleep(GATE_WINDOW_SECONDS)
+        if not pending:
+            continue
+        batch = pending[:]
+        pending.clear()
+        text = " ".join(t for _, t, _ in batch).strip()
+        audio = b"".join(a for _, _, a in batch)
+        log_stream("window", text=text, turns=len(batch),
+                   seconds=round(len(audio) / 2 / 16000, 1))
+        if not text:
+            continue
+        try:
+            await asyncio.to_thread(process, text, audio)
+        except Exception as exc:
+            log_stream("error", stage="gate_worker", error=f"{type(exc).__name__}: {exc}")
+            print(f"gate worker failed: {type(exc).__name__}: {exc}", flush=True)
+
+
 async def streaming_loop(read_buffer, consume, voice_idle_seconds, buffer_bytes,
-                         on_busy=None, on_done=None) -> None:
+                         on_done=None) -> None:
     """Streaming transcription: words are committed as they are spoken.
 
     Every tick the rolling window is transcribed; only the prefix that agrees
@@ -448,6 +475,19 @@ async def streaming_loop(read_buffer, consume, voice_idle_seconds, buffer_bytes,
     never replaced. The turn ends on voice-silence (or a full window), and one
     final pass over the whole turn produces the text that gets recorded.
     """
+    committed: list[str] = []
+    previous = ""
+    pending: list = []     # finished turns waiting for the next Gemma window
+    worker = asyncio.create_task(gate_worker(pending, process_text))
+    try:
+        await _stream_turns(read_buffer, consume, voice_idle_seconds, buffer_bytes,
+                            pending, on_done)
+    finally:
+        worker.cancel()
+
+
+async def _stream_turns(read_buffer, consume, voice_idle_seconds, buffer_bytes,
+                        pending: list, on_done) -> None:
     committed: list[str] = []
     previous = ""
     while True:
@@ -476,14 +516,8 @@ async def streaming_loop(read_buffer, consume, voice_idle_seconds, buffer_bytes,
             continue
         log_stream("transcript", text=final_text, audio_s=round(seconds, 2),
                    rms=rms(snapshot))
-        if on_busy:
-            await on_busy()
-        try:
-            # the gate and the write are slow: keep the audio loop free
-            await asyncio.to_thread(process_text, final_text, snapshot)
-        except Exception as exc:
-            log_stream("error", stage="process", error=f"{type(exc).__name__}: {exc}")
-            print(f"process failed: {type(exc).__name__}: {exc}", flush=True)
+        pending.append((time.time(), final_text, snapshot))
+        log_stream("queued", text=final_text, window_in=GATE_WINDOW_SECONDS)
         if on_done:
             await on_done()
 
