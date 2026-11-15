@@ -22,8 +22,8 @@ import asyncio
 import base64
 import json
 import os
+import re
 import sys
-from collections import deque
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -117,9 +117,13 @@ def parse_json_reply(content: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
-def transcribe(pcm: bytes) -> str:
+def transcribe(pcm: bytes, final: bool = False) -> str:
+    """Whisper on a live chunk: no hallucinated text on short or silent audio."""
     samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-    segments, _ = WHISPER.transcribe(samples, language="en")
+    segments, _ = WHISPER.transcribe(
+        samples, language="en", vad_filter=True,
+        condition_on_previous_text=False, no_speech_threshold=0.6,
+        beam_size=5 if final else 1)
     return " ".join(s.text.strip() for s in segments).strip()
 
 
@@ -280,16 +284,11 @@ def log_taken(quote: str) -> bool:
     return True
 
 
-VAD_FRAME = 512          # silero wants exactly 512 samples (32 ms) at 16 kHz
-SPEECH_RMS_FLOOR = 120    # never treat near-silence as speech
-SPEECH_FACTOR = 2.5       # speech is this much louder than the room
-VAD_THRESHOLD = 0.5       # silero p(speech) above this means speech
-VAD_HANGOVER_MS = 300     # keep speech alive this long after the last voiced frame
-FLOOR_PERCENTILE = 20    # the room is the quiet fifth of recent levels, not the average
-FLOOR_WINDOW = 250       # ~5 s of 20 ms frames
-SILENCE_MS = 1200         # an utterance ends after this much quiet
-MIN_SPEECH_MS = 700       # ignore blips shorter than this
-MAX_UTTERANCE_MS = 20000   # hard ceiling so a noisy room cannot grow forever
+BUFFER_SECONDS = 12       # rolling window: long enough for whole sentences
+PAUSE_SECONDS = 1.0      # this long without audio, the turn is over
+MIN_BUFFER_SECONDS = 0.8  # don't bother transcribing less than this
+REALTIME_TICK = 0.6      # how often we re-transcribe what is buffered
+SPEECH_RMS_FLOOR = 120    # below this a frame is just the room, not a voice
 MIN_WORDS = 3             # a 1-2 word fragment is not a report
 CHUNK_MS = 20             # the band sends 20 ms Opus packets
 SAMPLES_PER_CHUNK = 320   # 20 ms at 16 kHz mono
@@ -389,164 +388,201 @@ def decide(quote: str) -> dict:
     return verdict
 
 
-_VAD = None
+def process_text(quote: str, utterance: bytes) -> None:
+    """A finished transcript: gate, route, and write the record."""
+    if not quote:
+        return
+    verdict = decide(quote)
+    print(f"heard {quote!r} -> log={verdict['log']} kind={verdict['kind']} "
+          f"({verdict['reason']})", flush=True)
+    if not verdict["log"]:
+        return
+    if verdict["kind"] == "dose" or parse_taken(quote) is not None:
+        log_stream("route", text=quote, intent="dose", path="/MedicationAdministration")
+        log_taken(quote)
+        return
+    if verdict["kind"] in ("message", "visit"):
+        action = "Book a visit" if verdict["kind"] == "visit" else None
+        log_stream("route", text=quote, intent=verdict["kind"], path="/Communication")
+        post_message(quote, action)
+        return
+    log_stream("route", text=quote, intent="symptom", path="/Observation")
+    fields, used_model = extract(quote)
+    event = {
+        "schema_version": "0.1",
+        "id": f"evt-{int(time.time() * 1000)}",
+        "ts": iso_now(),
+        "source": OPTIONS.source,
+        "audio_seconds": round(len(utterance) / 2 / 16000, 2),
+        "verbatim_quote": quote,
+        "transcript_model": "faster-whisper-small",
+        "extract_model": used_model if fields else None,
+        **fields,
+    }
+    push_sealed(event)
 
 
-def vad_model():
-    """The trained speech detector (silero), loaded once."""
-    global _VAD
-    if _VAD is None:
-        import torch  # noqa: F401  — silero needs torch present
-        from silero_vad import load_silero_vad
-        _VAD = load_silero_vad()
-    return _VAD
+def common_prefix_words(a: str, b: str) -> str:
+    """The words both hypotheses agree on, in order — LocalAgreement-2.
+
+    Compared without punctuation or case ('three,' == 'three.'); the result
+    keeps b's original spelling.
+    """
+    def norm(w: str) -> str:
+        return re.sub(r"[^\w']", "", w.lower())
+
+    agreed, b_words = [], b.split()
+    for i, w1 in enumerate(a.split()):
+        if i >= len(b_words) or norm(w1) != norm(b_words[i]):
+            break
+        agreed.append(b_words[i])
+    return " ".join(agreed)
 
 
-def speech_probability(pcm: bytes) -> float:
-    """p(speech) for one 20 ms frame — silero needs exactly 512 samples at 16 kHz."""
-    import numpy as np
-    import torch
-    frame = np.frombuffer(pcm[:1024], dtype=np.int16).astype(np.float32) / 32768.0
-    if len(frame) < VAD_FRAME:
-        frame = np.pad(frame, (0, VAD_FRAME - len(frame)))
-    with torch.no_grad():
-        prob = float(vad_model()(torch.from_numpy(frame).reshape(1, -1), 16000).item())
-    return 0.0 if prob != prob else prob   # the model returns nan on a silent frame
+async def streaming_loop(read_buffer, consume, voice_idle_seconds, buffer_bytes,
+                         on_busy=None, on_done=None) -> None:
+    """Streaming transcription: words are committed as they are spoken.
+
+    Every tick the rolling window is transcribed; only the prefix that agrees
+    with the previous pass is committed, and committed words are only extended,
+    never replaced. The turn ends on voice-silence (or a full window), and one
+    final pass over the whole turn produces the text that gets recorded.
+    """
+    committed: list[str] = []
+    previous = ""
+    while True:
+        await asyncio.sleep(REALTIME_TICK)
+        snapshot = read_buffer()
+        seconds = len(snapshot) / 2 / 16000
+        if seconds < MIN_BUFFER_SECONDS:
+            continue
+        # take the idle time with the same snapshot: a quiet copy holds the whole turn
+        quiet = voice_idle_seconds() >= PAUSE_SECONDS
+        full = len(snapshot) >= buffer_bytes
+        hypothesis = (await asyncio.to_thread(transcribe, snapshot)).strip()
+        agreed = common_prefix_words(previous, hypothesis).split()
+        if agreed[:len(committed)] == committed and len(agreed) > len(committed):
+            fresh = agreed[len(committed):]
+            committed += fresh
+            log_stream("words", text=" ".join(fresh), so_far=" ".join(committed),
+                       audio_s=round(seconds, 2))
+        previous = hypothesis
+        if not (quiet or full):
+            continue
+        consume(len(snapshot))
+        committed, previous = [], ""
+        final_text = (await asyncio.to_thread(transcribe, snapshot, True)).strip()
+        if not final_text:
+            continue
+        log_stream("transcript", text=final_text, audio_s=round(seconds, 2),
+                   rms=rms(snapshot))
+        if on_busy:
+            await on_busy()
+        try:
+            # the gate and the write are slow: keep the audio loop free
+            await asyncio.to_thread(process_text, final_text, snapshot)
+        except Exception as exc:
+            log_stream("error", stage="process", error=f"{type(exc).__name__}: {exc}")
+            print(f"process failed: {type(exc).__name__}: {exc}", flush=True)
+        if on_done:
+            await on_done()
+
+
+async def mic_loop() -> None:
+    """Streaming transcription from the laptop microphone."""
+    import sounddevice as sd
+
+    buffer = bytearray()
+    heard = 0
+    consumed = 0
+    last_voice = 0.0
+    lock = threading.Lock()
+    buffer_bytes = int(16000 * 2 * BUFFER_SECONDS)
+
+    def on_mic(indata, frames, time_info, status) -> None:
+        nonlocal heard, last_voice
+        if status:
+            log_stream("error", stage="mic", error=str(status))
+        pcm = bytes(indata)
+        if rms(pcm) >= SPEECH_RMS_FLOOR:
+            last_voice = time.time()
+        with lock:
+            buffer.extend(pcm)
+            heard += len(pcm)
+
+    def read_buffer() -> bytes:
+        with lock:
+            return bytes(buffer)
+
+    def consume(count: int) -> None:
+        nonlocal consumed
+        with lock:
+            keep_from = min(consumed + count, heard)
+            del buffer[:keep_from - consumed]
+            consumed = keep_from
+
+    stream = sd.RawInputStream(samplerate=16000, channels=1, dtype="int16",
+                               blocksize=1600, callback=on_mic)
+    stream.start()
+    print("microphone: listening — just talk", flush=True)
+    try:
+        await streaming_loop(read_buffer, consume,
+                             lambda: time.time() - last_voice, buffer_bytes)
+    finally:
+        stream.stop()
+        stream.close()
 
 
 async def band_loop() -> None:
+    """Streaming transcription from the band over BLE."""
     from vexo_open import Band as AsyncBand
     from vexo_open.audio import PcmDecoder
 
     decoder = PcmDecoder()
     band = await AsyncBand.connect(29, transport=OPTIONS.transport)
 
-    speech = bytearray()      # the utterance being built
-    pre_roll = bytearray()     # a little audio before speech starts
-    quiet_chunks = 0
-    speech_chunks = 0
-    hangover = 0               # frames left before a voiced run really ended
-    levels: deque[int] = deque(maxlen=FLOOR_WINDOW)   # recent loudness, for the room floor
-    vframe = bytearray()       # leftover bytes that don't fill a full VAD frame yet
-    silence = bytearray()      # the tail of the utterance, kept while deciding
+    buffer = bytearray()     # everything heard since the last consumed turn
+    heard = 0                # total bytes ever appended, so a turn consumes a span
+    consumed = 0             # bytes already sent for transcription
+    last_voice = 0.0         # when something actually sounded (silence is not a voice)
+    lock = threading.Lock()
+    buffer_bytes = int(16000 * 2 * BUFFER_SECONDS)
 
     def on_audio(packet) -> None:
-        nonlocal quiet_chunks, speech_chunks, hangover
+        nonlocal heard, last_voice
         pcm = decoder.feed(packet)
         if not pcm:
             return
-        level = rms(pcm)
-        levels.append(level)
-        # the room is the quiet part of the recent past — a fan or music can't inflate it
-        ordered = sorted(levels)
-        floor = ordered[len(ordered) * FLOOR_PERCENTILE // 100]
-        threshold = max(SPEECH_RMS_FLOOR, floor * SPEECH_FACTOR)
-        # a full VAD frame costs a lot less than it is worth: only run it when it could matter
-        vframe.extend(pcm)
-        if len(vframe) < 1024:
-            return
-        frame, vframe[:] = bytes(vframe[:1024]), vframe[1024:]
-        loud = rms(frame) >= threshold
-        prob = speech_probability(frame) if loud or speech_chunks else 0.0
-        voiced = loud and prob >= VAD_THRESHOLD
-        if voiced and not speech_chunks:
-            log_stream("speech", rms=level, prob=round(prob, 2), floor=floor,
-                       threshold=round(threshold), started=True)
-        elif voiced:
-            hangover = VAD_HANGOVER_MS // CHUNK_MS
-        elif hangover:
-            hangover -= 1
-            voiced = True   # bridge a short pause inside one sentence
-        if OPTIONS.verbose_vad:
-            log_stream("vad", rms=level, prob=round(prob, 2), floor=floor,
-                       threshold=round(threshold), speech=voiced)
-        if voiced:
-            speech.extend(pre_roll)
-            pre_roll.clear()
-            speech.extend(frame)
-            quiet_chunks = 0
-            speech_chunks += 1
-            return
-        if speech_chunks:
-            speech.extend(frame)
-            quiet_chunks += 1
-            return
-        pre_roll.extend(frame)
-        if len(pre_roll) > SAMPLES_PER_CHUNK * 2 * 25:
-            del pre_roll[:len(pre_roll) - SAMPLES_PER_CHUNK * 2 * 25]
+        if rms(pcm) >= SPEECH_RMS_FLOOR:
+            last_voice = time.time()
+        with lock:
+            buffer.extend(pcm)
+            heard += len(pcm)
+
+    def read_buffer() -> bytes:
+        with lock:
+            return bytes(buffer)
+
+    def consume(count: int) -> None:
+        """Drop the turn that was transcribed, keeping anything said meanwhile."""
+        nonlocal consumed
+        with lock:
+            keep_from = min(consumed + count, heard)
+            dropped = keep_from - consumed
+            del buffer[:dropped]
+            consumed = keep_from
 
     band.on("audio", on_audio)
     for gesture in ("tap", "double-tap", "event"):
         band.on(gesture, lambda e, g=gesture: log_stream(
             "band_event", event=g, detail=str(getattr(e, "kind", "") or "")))
 
-    async def process(utterance: bytes) -> None:
-        quote = await asyncio.to_thread(transcribe, utterance)
-        log_stream("transcript", text=quote or "",
-                   audio_s=round(len(utterance) / 2 / 16000, 2), rms=rms(utterance))
-        if not quote:
-            return
-        verdict = await asyncio.to_thread(decide, quote)
-        print(f"heard {quote!r} -> log={verdict['log']} kind={verdict['kind']} "
-              f"({verdict['reason']})", flush=True)
-        if not verdict["log"]:
-            return
-        if verdict["kind"] == "dose" or parse_taken(quote) is not None:
-            log_stream("route", text=quote, intent="dose", path="/MedicationAdministration")
-            await asyncio.to_thread(log_taken, quote)
-            return
-        if verdict["kind"] in ("message", "visit"):
-            action = "Book a visit" if verdict["kind"] == "visit" else None
-            log_stream("route", text=quote, intent=verdict["kind"], path="/Communication")
-            await asyncio.to_thread(post_message, quote, action)
-            return
-        log_stream("route", text=quote, intent="symptom", path="/Observation")
-        fields, used_model = await asyncio.to_thread(extract, quote)
-        event = {
-            "schema_version": "0.1",
-            "id": f"evt-{int(time.time() * 1000)}",
-            "ts": iso_now(),
-            "source": "band",
-            "audio_seconds": round(len(utterance) / 2 / 16000, 2),
-            "verbatim_quote": quote,
-            "transcript_model": "faster-whisper-small",
-            "extract_model": used_model if fields else None,
-            **fields,
-        }
-        await asyncio.to_thread(push_sealed, event)
-
     await band.configure(audio=True)
     print(f"band {band.name} over {OPTIONS.transport}: listening — just talk", flush=True)
     try:
-        while True:
-            await asyncio.sleep(0.2)
-            ms = quiet_chunks * CHUNK_MS
-            spoken = speech_chunks * CHUNK_MS
-            too_long = spoken >= MAX_UTTERANCE_MS
-            if not speech_chunks or not (ms >= SILENCE_MS or too_long):
-                continue
-            utterance = bytes(speech)
-            speech.clear()
-            speech_chunks = 0
-            quiet_chunks = 0
-            if len(utterance) < MIN_SPEECH_MS * 32:
-                log_stream("vad_drop", reason="too short",
-                           audio_s=round(len(utterance) / 2 / 16000, 2))
-                continue
-            log_stream("utterance", audio_s=round(len(utterance) / 2 / 16000, 2),
-                       speech_ms=spoken)
-            # the mic owns the light, so stop it briefly to show red / green
-            await band.configure(audio=False)
-            await set_led(band, LED_PROCESSING)
-            try:
-                await process(utterance)
-                await set_led(band, LED_SAVED)
-            except Exception as exc:
-                print(f"process failed: {type(exc).__name__}: {exc}", flush=True)
-                await set_led(band, LED_UNCLEAR)
-            await asyncio.sleep(LED_HOLD_SECONDS)
-            pre_roll.clear()
-            await band.configure(audio=True)
+        # the band stays listening while a turn is processed: nothing is lost
+        await streaming_loop(read_buffer, consume,
+                             lambda: time.time() - last_voice, buffer_bytes)
     finally:
         await band.configure(audio=False)
         await band.disconnect()
@@ -557,6 +593,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8768)
     parser.add_argument("--band", action="store_true", help="also run the band pipeline")
+    parser.add_argument("--mic", action="store_true", help="use the laptop microphone instead")
     parser.add_argument("--transport", default="ble", choices=["ble", "serial"])
     parser.add_argument("--records", default="http://localhost:8766")
     parser.add_argument("--ollama", default="http://localhost:11434/v1")
@@ -567,8 +604,6 @@ def main() -> None:
                         help="secondary model name for the fallback endpoint")
     parser.add_argument("--whisper", default="/tmp/faster-whisper-small")
     parser.add_argument("--allow", nargs="*", default=["http://localhost:8766"])
-    parser.add_argument("--verbose-vad", action="store_true",
-                        help="also log every 20 ms audio frame (level, noise floor, speech?)")
     OPTIONS = parser.parse_args()
 
     SECRET = dc.load_or_create_secret()
@@ -583,10 +618,11 @@ def main() -> None:
         target=lambda: ThreadingHTTPServer(("127.0.0.1", OPTIONS.port), KeyHandler).serve_forever(),
         daemon=True).start()
 
-    if OPTIONS.band:
+    OPTIONS.source = "mic" if OPTIONS.mic else "band"
+    if OPTIONS.band or OPTIONS.mic:
         from faster_whisper import WhisperModel
         WHISPER = WhisperModel(OPTIONS.whisper, device="cpu", compute_type="int8")
-        asyncio.run(band_loop())
+        asyncio.run(mic_loop() if OPTIONS.mic else band_loop())
         return
     print("no --band: key handoff only. Ctrl+C to stop.", flush=True)
     try:

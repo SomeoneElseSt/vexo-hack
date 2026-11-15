@@ -71,6 +71,18 @@ def line_speech(entry: dict) -> str:
               f"(floor {entry.get('floor')}) — the patient is talking")
 
 
+def line_words(entry: dict) -> str:
+    """Committed words: they never change once printed."""
+    return (pad(paint("+ words", GREEN), 22)
+            + f"{entry.get('text', '')!r}"
+            + paint(f"   so far: {entry.get('so_far', '')!r}", DIM))
+
+
+def line_partial(entry: dict) -> str:
+    return (pad(paint("… partial", DIM), 22)
+            + paint(f"{entry.get('text', '')!r}  ({entry.get('audio_s')}s)", DIM))
+
+
 def line_utterance(entry: dict) -> str:
     return (pad(paint("♪ utterance", BLUE), 22)
             + f"{entry.get('audio_s')}s ({entry.get('speech_ms')} ms speech)")
@@ -143,6 +155,7 @@ def line_generic(entry: dict) -> str:
 
 
 RENDER = {
+    "words": line_words, "partial": line_partial,
     "speech": line_speech, "utterance": line_utterance, "vad_drop": line_vad_drop,
     "transcript": line_transcript, "gate": line_gate, "route": line_route,
     "api": line_api, "model": line_model, "band_event": line_band_event,
@@ -218,7 +231,8 @@ def follow(path: Path, offset: int) -> int:
             except json.JSONDecodeError:
                 continue
             render = RENDER.get(entry.get("type")) or line_generic
-            if entry.get("type") == "speech":
+            if entry.get("type") == "words" and not entry.get("so_far", "").count(" "):
+                print(separator(entry.get("t", "")), flush=True)
                 print(separator(entry.get("t", "")), flush=True)
             print("  " + render(entry), flush=True)
         return fh.tell()
