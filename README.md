@@ -67,7 +67,7 @@ my-project/
 You need Python 3, [Ollama](https://ollama.com) with `gemma3:12b` (and `gemma3:4b` for the gate), and the Vexo Open kit in `vexo-open-kit/` for the band. The kit isn't committed.
 
 ```bash
-pip install requests numpy cryptography faster-whisper sounddevice
+pip install requests numpy cryptography faster-whisper sounddevice torch silero-vad superserve
 ollama pull gemma3:12b && ollama pull gemma3:4b
 ```
 
@@ -80,10 +80,29 @@ python my-project/records_server.py --port 8766
 Start the bridge with the band, or with the laptop mic using `--mic`:
 
 ```bash
-python my-project/local_bridge.py --band --records http://localhost:8766 --allow http://localhost:8766
+python my-project/local_bridge.py --band --records http://localhost:8766 --allow http://localhost:8766 \
+  --ollama http://localhost:11434/v1 --gemma gemma3:12b \
+  --ollama-fallback http://localhost:11434/v1 --gemma-fallback gemma3:4b
 ```
 
+The gate always runs on the local `gemma3:4b`; `--gemma` is the extraction/visit-note model and
+`--gemma-fallback` is what it falls back to if that endpoint fails. Use `--mic` instead of `--band`
+to feed the laptop microphone through the same pipeline.
+
+The band needs the Vexo Open kit on the path:
+`export PYTHONPATH=$PWD/vexo-open-kit/python` (the kit is not committed).
+
 Open http://localhost:8766. Add `?view=phone` or `?view=desktop` to force a layout.
+
+Two more processes make the live demo complete:
+
+```bash
+# copy each sealed record to the VM vault every second (one-way, blobs only)
+set -a && . ./.env && set +a && python my-project/sync_records.py --watch
+
+# the pretty live log: what the band heard, how it was classified, what was written
+python my-project/watch.py     # reads /tmp/stream.jsonl and /tmp/api.jsonl
+```
 
 ### Voice commands
 
