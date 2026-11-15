@@ -129,17 +129,19 @@ def line_api(entry: dict) -> str:
     payload = entry.get("payload")
     if not payload:
         return head
-    # on camera, a record reads better as labelled fields than as JSON
-    labels = (("body_location", "body"), ("quality", "quality"),
-              ("severity", "severity"), ("activity", "activity"),
-              ("extract_model", "model"), ("ts", "at"))
-    fields = [f"{name} {payload[key]}" for key, name in labels if payload.get(key)]
+    # centre stage on camera: one thing per line, each field as name: value
+    labels = (("ts", "at"), ("source", "source"), ("body_location", "body"),
+              ("quality", "quality"), ("severity", "severity"),
+              ("activity", "activity"), ("extract_model", "model"))
     quote = payload.get("verbatim_quote")
     lines = [head]
     if quote:
-        lines.append(" " * 25 + paint(f'"{quote}"', DIM))
-    if fields:
-        lines.append(" " * 25 + paint("  ·  ".join(fields), CYAN))
+        lines.append(" " * 25 + paint("said: ", DIM) + f'"{quote}"')
+    for key, name in labels:
+        value = payload.get(key)
+        if value is None or value == "":
+            continue
+        lines.append(" " * 25 + paint(f"{name}: ", DIM) + paint(str(value), CYAN))
     return "\n".join(lines)
 
 
